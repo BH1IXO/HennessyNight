@@ -1,0 +1,114 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 数据库
+  postgres:
+    image: postgres:14-alpine
+    container_name: meeting-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: meeting123456
+      POSTGRES_DB: meeting_system
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - meeting-network
+
+  # Redis (可选，用于缓存和队列)
+  redis:
+    image: redis:7-alpine
+    container_name: meeting-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - meeting-network
+
+  # 后端服务
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: meeting-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      DATABASE_URL: postgresql://postgres:meeting123456@postgres:5432/meeting_system?schema=public
+      REDIS_URL: redis://redis:6379
+      DEEPSEEK_API_KEY: sk-54c3f8dd90f145e8919f05dc7f137722
+      DEEPSEEK_BASE_URL: https://api.deepseek.com/v1
+      DEEPSEEK_MODEL: deepseek-chat
+      TRANSCRIPTION_PROVIDER: vosk
+      VOSK_MODEL_PATH: /app/python/models/vosk-model-small-cn-0.22
+      VOSK_LANGUAGE: zh
+      VOSK_SAMPLE_RATE: 16000
+      PYANNOTE_DEVICE: cpu
+      PYANNOTE_MODEL_PATH: pyannote/speaker-diarization
+      CORS_ORIGIN: "*"
+      MAX_CONCURRENT_SESSIONS: 10
+      SESSION_TIMEOUT: 3600000
+    volumes:
+      - ./uploads:/app/uploads
+      - ./python/models:/app/python/models
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - meeting-network
+
+  # Nginx (可选，用于反向代理和静态文件服务)
+  nginx:
+    image: nginx:alpine
+    container_name: meeting-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend
+    networks:
+      - meeting-network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  meeting-network:
+    driver: bridge

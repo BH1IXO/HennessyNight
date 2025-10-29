@@ -1,0 +1,402 @@
+// Prisma Schema - 智能会议纪要系统数据库设计
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== 用户和认证 ====================
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  password  String   // bcrypt加密
+  role      Role     @default(USER)
+  avatar    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 关联
+  meetings  Meeting[]
+  speakers  Speaker[]
+  terms     Term[]
+  audioFiles AudioFile[]
+
+  @@index([email])
+  @@map("users")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+// ==================== 声纹和说话人 ====================
+
+model Speaker {
+  id              String   @id @default(cuid())
+  name            String
+  email           String?
+  phone           String?
+
+  // Azure Speaker Recognition相关
+  azureProfileId  String?  @unique // Azure Profile ID
+  profileStatus   ProfileStatus @default(CREATED)
+  enrollmentCount Int      @default(0)  // 已训练次数
+  lastEnrollment  DateTime? // 最后训练时间
+
+  // 声纹特征数据（备用，用于其他声纹引擎）
+  voiceprintData  Json?
+  voiceFile       String? // 声纹音频文件路径
+
+  // 元数据
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // 关联
+  messages        TranscriptMessage[]
+  enrollmentAudios EnrollmentAudio[]
+  meetingAttendees MeetingAttendee[]
+
+  @@index([userId])
+  @@index([azureProfileId])
+  @@map("speakers")
+}
+
+enum ProfileStatus {
+  CREATED      // 已创建
+  ENROLLING    // 训练中
+  ENROLLED     // 已训练完成
+  FAILED       // 训练失败
+}
+
+// 声纹训练音频记录
+model EnrollmentAudio {
+  id         String   @id @default(cuid())
+  speakerId  String
+  speaker    Speaker  @relation(fields: [speakerId], references: [id], onDelete: Cascade)
+  audioUrl   String
+  duration   Float    // 秒
+  status     EnrollmentStatus @default(PENDING)
+  error      String?
+  createdAt  DateTime @default(now())
+
+  @@index([speakerId])
+  @@map("enrollment_audios")
+}
+
+enum EnrollmentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// ==================== 会议 ====================
+
+model Meeting {
+  id          String   @id @default(cuid())
+  title       String
+  date        DateTime @default(now())
+  scheduledAt DateTime? // 计划开始时间
+  startTime   DateTime? // 实际开始时间
+  endTime     DateTime? // 实际结束时间
+  duration    Int?     // 秒
+  audioUrl    String?  // 主音频文件URL
+  status      MeetingStatus @default(SCHEDULED)
+
+  // 配置
+  enableDiarization Boolean @default(true) // 是否启用说话人分离
+  enableKnowledge   Boolean @default(true) // 是否启用知识库匹配
+
+  // 元数据
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // 关联
+  transcripts TranscriptMessage[]
+  summaries   Summary[]
+  attendees   MeetingAttendee[]
+  audioFiles  AudioFile[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([date])
+  @@index([scheduledAt])
+  @@map("meetings")
+}
+
+enum MeetingStatus {
+  SCHEDULED    // 已安排
+  RECORDING    // 录音中
+  IN_PROGRESS  // 进行中
+  PROCESSING   // 处理中
+  COMPLETED    // 已完成
+  CANCELLED    // 已取消
+  FAILED       // 失败
+}
+
+// 会议参会人
+model MeetingAttendee {
+  id        String   @id @default(cuid())
+  meetingId String
+  meeting   Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  speakerId String?
+  speaker   Speaker? @relation(fields: [speakerId], references: [id], onDelete: SetNull)
+  name      String
+  email     String?
+  role      String?  // 例如：主持人、记录员
+  createdAt DateTime @default(now())
+
+  @@unique([meetingId, email])
+  @@index([meetingId])
+  @@index([speakerId])
+  @@map("meeting_attendees")
+}
+
+// ==================== 转录 ====================
+
+model TranscriptMessage {
+  id          String   @id @default(cuid())
+  meetingId   String
+  meeting     Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  // 说话人信息
+  speakerId   String?
+  speaker     Speaker? @relation(fields: [speakerId], references: [id], onDelete: SetNull)
+  speakerName String?  // 如果没有识别到，使用Speaker 1, Speaker 2等
+  speakerLabel String? // 说话人标签
+
+  // 内容
+  content     String   @db.Text
+  timestamp   DateTime @default(now())
+  confidence  Float?   // 转录置信度
+
+  // 音频时间轴
+  startTime   Float?   // 在音频中的开始时间（秒）
+  endTime     Float?   // 在音频中的结束时间（秒）
+
+  // 知识库匹配
+  matchedTerms Json?   // 匹配的知识库词条IDs
+
+  // 元数据
+  language    String?  // 语言代码
+  createdAt   DateTime @default(now())
+
+  @@index([meetingId])
+  @@index([speakerId])
+  @@index([timestamp])
+  @@map("transcript_messages")
+}
+
+// ==================== 知识库 ====================
+
+model Term {
+  id          String   @id @default(cuid())
+  term        String
+  definition  String   @db.Text
+  category    String?
+  synonyms    String[] // 同义词数组
+  source      String?  // 来源
+
+  // 权限
+  userId      String?  // 创建者，null表示系统内置
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  isPublic    Boolean  @default(false) // 是否公开
+
+  // 使用统计
+  matchCount  Int      @default(0) // 匹配次数
+  lastMatched DateTime? // 最后匹配时间
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([term])
+  @@index([category])
+  @@index([userId])
+  @@map("terms")
+}
+
+// ==================== 会议纪要 ====================
+
+model Summary {
+  id          String   @id @default(cuid())
+  meetingId   String
+  meeting     Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  title       String
+  content     Json     // 结构化内容（topics, actionItems, decisions等）
+  htmlContent String?  @db.Text // HTML格式
+  mdContent   String?  @db.Text // Markdown格式
+  textContent String?  @db.Text // 纯文本格式
+
+  // 版本控制
+  version     Int      @default(1)
+
+  // AI生成相关
+  aiProvider  String?  // deepseek, openai等
+  aiModel     String?  // 使用的模型
+  aiTokens    Int?     // 消耗的tokens
+  generatedAt DateTime @default(now()) // AI生成时间
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([meetingId])
+  @@map("summaries")
+}
+
+// ==================== 音频文件 ====================
+
+model AudioFile {
+  id           String   @id @default(cuid())
+  filename     String   // 存储的文件名
+  originalName String   // 原始文件名
+  filePath     String?  // 本地文件路径
+  mimeType     String
+  size         Int      // 字节
+  duration     Float?   // 秒
+  sampleRate   Int?     // 采样率
+  channels     Int?     // 声道数
+
+  // 存储
+  url          String   // 文件URL（MinIO/S3）
+  bucket       String?  // 存储桶名称
+
+  // 处理状态
+  status       FileStatus @default(UPLOADED)
+  processingStatus String? // 处理状态描述
+  processedUrl String?  // 处理后的文件URL（转换为WAV 16kHz）
+
+  // 关联
+  meetingId    String?
+  meeting      Meeting? @relation(fields: [meetingId], references: [id], onDelete: SetNull)
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+  @@index([meetingId])
+  @@index([status])
+  @@map("audio_files")
+}
+
+enum FileStatus {
+  UPLOADED     // 已上传
+  PROCESSING   // 处理中
+  PROCESSED    // 处理完成
+  FAILED       // 处理失败
+}
+
+// ==================== 任务队列 ====================
+
+model Job {
+  id          String   @id @default(cuid())
+  type        JobType
+  data        Json     // 任务数据
+  status      JobStatus @default(PENDING)
+  priority    Int      @default(0)
+
+  // 重试
+  attempts    Int      @default(0)
+  maxAttempts Int      @default(3)
+
+  // 结果
+  result      Json?
+  error       String?  @db.Text
+
+  // 时间
+  startedAt   DateTime?
+  completedAt DateTime?
+  failedAt    DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
+  @@map("jobs")
+}
+
+enum JobType {
+  AUDIO_PROCESS      // 音频处理
+  TRANSCRIPTION      // 转录
+  SPEAKER_IDENTIFY   // 说话人识别
+  SUMMARY_GENERATE   // 生成纪要
+  EMAIL_SEND         // 发送邮件
+}
+
+enum JobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// ==================== 系统日志 ====================
+
+model SystemLog {
+  id        String   @id @default(cuid())
+  level     LogLevel
+  message   String   @db.Text
+  context   Json?
+  userId    String?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([level])
+  @@index([createdAt])
+  @@map("system_logs")
+}
+
+enum LogLevel {
+  DEBUG
+  INFO
+  WARN
+  ERROR
+  FATAL
+}
+
+// ==================== API使用统计 ====================
+
+model ApiUsage {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   // API端点
+  method    String   // HTTP方法
+
+  // Azure API统计
+  azureSpeechTokens    Int @default(0)
+  azureSpeakerCalls    Int @default(0)
+
+  // DeepSeek API统计
+  deepseekInputTokens  Int @default(0)
+  deepseekOutputTokens Int @default(0)
+
+  // 响应时间(毫秒)
+  responseTime Int?
+
+  // 成本（分）
+  cost      Int      @default(0)
+
+  date      DateTime @default(now())
+  createdAt DateTime @default(now())
+
+  @@unique([userId, endpoint, date])
+  @@index([userId])
+  @@index([date])
+  @@map("api_usage")
+}
