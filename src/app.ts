@@ -93,8 +93,9 @@ export function createApp(): Express {
   app.use(`${API_PREFIX}/sessions`, sessionsRouter);
   app.use(`${API_PREFIX}/terms`, termsRouter);
 
-  // 根路由
-  app.get('/', (req: Request, res: Response) => {
+  // 根路由 - 前端页面由静态文件中间件自动处理
+  // 如果访问根路径且没有找到 index.html，显示API信息
+  app.get('/api', (req: Request, res: Response) => {
     res.json({
       name: 'Meeting System API',
       version: '1.0.0',

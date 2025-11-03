@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>声纹提取调试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px 5px;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background: #f5f5f5;
+        }
+        .success { color: green; }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+    <h1>🎤 声纹提取调试工具</h1>
+
+    <div>
+        <h3>步骤1: 选择音频文件</h3>
+        <input type="file" id="audioFile" accept="audio/*">
+    </div>
+
+    <div>
+        <h3>步骤2: 提取特征</h3>
+        <button id="extractBtn">提取声纹特征</button>
+    </div>
+
+    <div id="result"></div>
+
+    <!-- 加载脚本 -->
+    <script src="./voiceprint-extractor-fast.js?v=20250203-5"></script>
+    <script src="./voiceprint-matcher.js?v=20250203-5"></script>
+
+    <script>
+        const resultDiv = document.getElementById('result');
+
+        function log(message, isError = false) {
+            const p = document.createElement('p');
+            p.className = isError ? 'error' : 'success';
+            p.textContent = message;
+            resultDiv.appendChild(p);
+            console.log(message);
+        }
+
+        document.getElementById('extractBtn').addEventListener('click', async () => {
+            resultDiv.innerHTML = '';
+
+            const fileInput = document.getElementById('audioFile');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                log('❌ 请先选择音频文件', true);
+                return;
+            }
+
+            log('📂 文件: ' + file.name);
+            log('📊 大小: ' + (file.size / 1024).toFixed(2) + ' KB');
+            log('🎵 类型: ' + file.type);
+            log('');
+
+            try {
+                // 检查类是否加载
+                log('🔍 检查 VoiceprintExtractor: ' + (typeof VoiceprintExtractor));
+                if (typeof VoiceprintExtractor === 'undefined') {
+                    throw new Error('VoiceprintExtractor 未加载');
+                }
+
+                // 创建提取器
+                log('🛠️ 创建提取器实例...');
+                const extractor = new VoiceprintExtractor();
+
+                // 提取特征
+                log('⏳ 开始提取特征...');
+                const startTime = Date.now();
+
+                const result = await extractor.extractFromFile(file);
+
+                const endTime = Date.now();
+                const duration = ((endTime - startTime) / 1000).toFixed(2);
+
+                log('');
+                log('✅ 提取成功!');
+                log('⏱️ 耗时: ' + duration + ' 秒');
+                log('📊 特征向量维度: ' + result.vector.length);
+                log('⏰ 音频时长: ' + result.duration.toFixed(2) + ' 秒');
+                log('🎵 采样率: ' + result.sampleRate + ' Hz');
+                log('');
+                log('🔢 向量前10维:');
+                log(JSON.stringify(result.vector.slice(0, 10).map(v => v.toFixed(4))));
+
+            } catch (error) {
+                log('', true);
+                log('❌ 提取失败!', true);
+                log('错误信息: ' + error.message, true);
+                log('错误堆栈:', true);
+                log(error.stack, true);
+                console.error('完整错误:', error);
+            }
+        });
+
+        // 页面加载完成
+        window.addEventListener('load', () => {
+            log('✅ 页面加载完成');
+            log('✅ VoiceprintExtractor: ' + (typeof VoiceprintExtractor !== 'undefined' ? '已加载' : '未加载'));
+            log('✅ VoiceprintMatcher: ' + (typeof VoiceprintMatcher !== 'undefined' ? '已加载' : '未加载'));
+        });
+    </script>
+</body>
+</html>
