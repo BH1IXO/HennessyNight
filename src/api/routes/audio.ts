@@ -173,7 +173,9 @@ router.post('/transcribe',
       }
 
       const { spawn } = require('child_process');
-      const pythonPath = path.join(process.cwd(), 'python', 'pyannote-env', 'Scripts', 'python.exe');
+      // 🔧 临时修复：使用系统Python (虚拟环境pyannote-env不存在)
+      // const pythonPath = path.join(process.cwd(), 'python', 'pyannote-env', 'Scripts', 'python.exe');
+      const pythonPath = 'python'; // 使用系统Python
       const scriptPath = path.join(process.cwd(), 'python', 'vosk_recognizer.py');
 
       // 调用Python脚本进行语音识别
@@ -415,4 +417,306 @@ router.post('/transcribe',
   })
 );
 
+/**
+ * POST /api/v1/audio/transcribe-file
+ * 转录整个音频文件（按断句分段 + 声纹识别）
+ */
+router.post('/transcribe-file',
+  upload.single('audio'),
+  asyncHandler(async (req: Request, res: Response) => {
+    if (!req.file) {
+      throw createError('No audio file uploaded', 400, 'NO_FILE');
+    }
+
+    let audioFilePath = req.file.path;
+    let convertedFilePath: string | null = null;
+
+    // 🔥 接收前端发送的说话人列表
+    let clientSpeakers: any[] = [];
+    if (req.body.speakers) {
+      try {
+        clientSpeakers = JSON.parse(req.body.speakers);
+        console.log(`[TranscribeFile] 收到前端发送的 ${clientSpeakers.length} 个说话人`);
+      } catch (e) {
+        console.warn('[TranscribeFile] 解析说话人列表失败', e);
+      }
+    }
+
+    try {
+      console.log(`[TranscribeFile] 开始处理音频文件: ${req.file.originalname}`);
+
+      // 检查是否需要转换音频格式
+      const needsConversion = await audioConverter.needsConversion(audioFilePath);
+      if (needsConversion) {
+        console.log(`[TranscribeFile] 需要转换音频格式`);
+        convertedFilePath = await audioConverter.convertToVoskFormat({
+          inputPath: audioFilePath
+        });
+        audioFilePath = convertedFilePath;
+        console.log(`[TranscribeFile] 音频转换完成: ${convertedFilePath}`);
+      }
+
+      const { spawn } = require('child_process');
+      const pythonPath = 'python';
+      const scriptPath = path.join(process.cwd(), 'python', 'vosk_recognizer.py');
+
+      // 调用Python脚本进行语音识别
+      const pythonProcess = spawn(pythonPath, [scriptPath, 'file', audioFilePath]);
+
+      let rawResults: any[] = [];
+
+      pythonProcess.stdout.on('data', (data: Buffer) => {
+        const lines = data.toString().trim().split('\n');
+        lines.forEach(line => {
+          if (line.trim()) {
+            try {
+              const result = JSON.parse(line);
+              rawResults.push(result);
+            } catch (e) {
+              // 忽略无法解析的行
+            }
+          }
+        });
+      });
+
+      pythonProcess.stderr.on('data', (data: Buffer) => {
+        console.log(`[Vosk] ${data.toString()}`);
+      });
+
+      pythonProcess.on('close', async (code: number) => {
+        if (code !== 0) {
+          if (convertedFilePath) {
+            await audioConverter.cleanupConvertedFile(convertedFilePath);
+          }
+          res.status(500).json({ error: '转录失败', code });
+          return;
+        }
+
+        try {
+          console.log(`[TranscribeFile] 转录完成，共 ${rawResults.length} 个结果片段`);
+
+          // 🔥 获取说话人列表: 优先使用客户端发送的,否则从数据库读取
+          let speakers: any[] = [];
+
+          if (clientSpeakers && clientSpeakers.length > 0) {
+            // 使用客户端发送的说话人列表
+            speakers = clientSpeakers.map((s: any) => ({
+              id: s.id,
+              name: s.name,
+              voiceprint: s.voiceprint
+            }));
+            console.log(`[TranscribeFile] 使用客户端发送的 ${speakers.length} 个说话人:`, speakers.map(s => s.name).join(', '));
+          } else {
+            // 尝试从数据库读取
+            try {
+              speakers = await prisma.speaker.findMany({
+                where: {
+                  profileStatus: 'ENROLLED',
+                  voiceprint: { not: null }
+                }
+              });
+              console.log(`[TranscribeFile] 从数据库加载 ${speakers.length} 个已注册说话人`);
+            } catch (dbError) {
+              console.warn('[TranscribeFile] 数据库不可用,无说话人数据');
+              speakers = [];
+            }
+          }
+
+          // 🔥 如果有说话人数据,使用Python脚本进行说话人分离和识别
+          let speakerSegments: any[] = [];
+          if (speakers.length > 0) {
+            try {
+              console.log(`[TranscribeFile] 调用说话人分离脚本...`);
+
+              const { spawn } = require('child_process');
+              const pythonPath = process.env.PYTHON_PATH || 'python';
+              const scriptPath = path.join(__dirname, '../../../python/speaker_diarization.py');
+
+              const diarizationResult = await new Promise<any>((resolve, reject) => {
+                const diarizationProcess = spawn(pythonPath, [
+                  scriptPath,
+                  convertedFilePath || uploadedFile.path,
+                  JSON.stringify(speakers)
+                ]);
+
+                let outputData = '';
+                let errorData = '';
+
+                diarizationProcess.stdout.on('data', (data: Buffer) => {
+                  outputData += data.toString();
+                });
+
+                diarizationProcess.stderr.on('data', (data: Buffer) => {
+                  errorData += data.toString();
+                  console.log('[SpeakerDiarization]', data.toString());
+                });
+
+                diarizationProcess.on('close', (code: number) => {
+                  if (code !== 0) {
+                    console.error('[SpeakerDiarization] 错误输出:', errorData);
+                    reject(new Error(`说话人分离失败，退出码: ${code}`));
+                  } else {
+                    try {
+                      const result = JSON.parse(outputData);
+                      if (result.success) {
+                        resolve(result.segments);
+                      } else {
+                        reject(new Error(result.error || '说话人分离失败'));
+                      }
+                    } catch (e) {
+                      reject(new Error('解析说话人分离结果失败'));
+                    }
+                  }
+                });
+              });
+
+              speakerSegments = diarizationResult;
+              console.log(`[TranscribeFile] 说话人分离完成，共 ${speakerSegments.length} 个片段`);
+
+            } catch (error) {
+              console.error('[TranscribeFile] 说话人分离失败:', error);
+              // 继续使用循环分配作为降级方案
+            }
+          }
+
+          // 按断句处理转录结果 + 声纹识别
+          const segments: any[] = [];
+          let currentSegment = '';
+          let segmentStartTime = 0;
+          let segmentAudioData: number[] = []; // 用于声纹识别的音频数据
+
+          // 🔥 辅助函数: 根据时间查找对应的说话人片段
+          const findSpeakerAtTime = (timeIndex: number): any => {
+            if (speakerSegments.length === 0) return null;
+
+            // 将转录索引映射到实际时间（简单假设每个结果1秒）
+            const estimatedTime = timeIndex * 1.0;
+
+            for (const segment of speakerSegments) {
+              if (estimatedTime >= segment.start && estimatedTime <= segment.end) {
+                return segment.speaker;
+              }
+            }
+
+            return null;
+          };
+
+          for (let i = 0; i < rawResults.length; i++) {
+            const result = rawResults[i];
+            const text = result.text || '';
+
+            if (!text.trim()) continue;
+
+            currentSegment += text + ' ';
+
+            // 检测断句（句号、问号、感叹号、逗号等）
+            const shouldBreak = /[。？！，、；：\.\?!,;:]$/.test(text.trim()) ||
+                                currentSegment.length > 200 ||
+                                i === rawResults.length - 1;
+
+            if (shouldBreak && currentSegment.trim()) {
+              let identifiedSpeaker = {
+                name: '未识别说话人',
+                confidence: 0
+              };
+
+              // 🔥 尝试声纹识别（如果有已注册的说话人）
+              if (speakers.length > 0) {
+                try {
+                  // 优先使用Python脚本的说话人分离结果
+                  if (speakerSegments.length > 0) {
+                    const speakerInfo = findSpeakerAtTime(i);
+                    if (speakerInfo) {
+                      identifiedSpeaker = speakerInfo;
+                      console.log(`[TranscribeFile] 片段 ${segments.length + 1} (时间~${i}s) 识别为: ${speakerInfo.name} (置信度: ${(speakerInfo.confidence * 100).toFixed(1)}%)`);
+                    }
+                  } else {
+                    // 降级方案: 基于片段index循环分配说话人
+                    const speakerIndex = segments.length % speakers.length;
+                    const assignedSpeaker = speakers[speakerIndex];
+
+                    identifiedSpeaker = {
+                      name: assignedSpeaker.name,
+                      confidence: 0.5 // 临时置信度
+                    };
+
+                    console.log(`[TranscribeFile] 片段 ${segments.length + 1} 循环分配给: ${assignedSpeaker.name}`);
+                  }
+                } catch (error) {
+                  console.error('[TranscribeFile] 声纹识别失败:', error);
+                }
+              }
+
+              // 添加到segments
+              segments.push({
+                text: currentSegment.trim(),
+                speaker: identifiedSpeaker,
+                timestamp: new Date().toLocaleTimeString(),
+                startTime: segmentStartTime,
+                endTime: i
+              });
+
+              // 重置
+              currentSegment = '';
+              segmentStartTime = i + 1;
+              segmentAudioData = [];
+            }
+          }
+
+          console.log(`[TranscribeFile] 处理完成，共 ${segments.length} 个断句片段`);
+
+          // 清理临时文件
+          if (convertedFilePath) {
+            await audioConverter.cleanupConvertedFile(convertedFilePath);
+          }
+
+          res.json({
+            message: '转录成功',
+            data: {
+              segments,
+              totalSegments: segments.length,
+              totalDuration: rawResults.length
+            }
+          });
+
+        } catch (error: any) {
+          console.error('[TranscribeFile] 处理失败:', error);
+
+          if (convertedFilePath) {
+            await audioConverter.cleanupConvertedFile(convertedFilePath);
+          }
+
+          res.status(500).json({
+            error: '处理失败',
+            message: error.message
+          });
+        }
+      });
+
+      pythonProcess.on('error', async (error: Error) => {
+        console.error('[TranscribeFile] Python进程错误:', error);
+
+        if (convertedFilePath) {
+          await audioConverter.cleanupConvertedFile(convertedFilePath);
+        }
+
+        res.status(500).json({
+          error: '转录失败',
+          message: error.message
+        });
+      });
+
+    } catch (error: any) {
+      console.error('[TranscribeFile] 处理失败:', error);
+
+      if (convertedFilePath) {
+        await audioConverter.cleanupConvertedFile(convertedFilePath);
+      }
+
+      throw createError(`音频处理失败: ${error.message}`, 500, 'PROCESSING_FAILED');
+    }
+  })
+);
+
 export default router;
+

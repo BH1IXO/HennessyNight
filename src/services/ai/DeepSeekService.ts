@@ -111,8 +111,8 @@ export class DeepSeekService extends EventEmitter {
       baseURL: config.baseURL || 'https://api.deepseek.com/v1',
       model: config.model || 'deepseek-chat',
       temperature: config.temperature ?? 0.7,
-      maxTokens: config.maxTokens || 4000,
-      timeout: config.timeout || 60000
+      maxTokens: config.maxTokens || 2000,  // 降低默认token数以加快速度
+      timeout: config.timeout || 30000       // 降低超时时间到30秒
     };
 
     // 创建Axios客户端
@@ -243,14 +243,14 @@ export class DeepSeekService extends EventEmitter {
         includeKeyPoints
       });
 
-      // 调用AI生成
+      // 调用AI生成(优化参数以加快速度)
       const response = await this.chatCompletion({
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
         ],
-        temperature: 0.3, // 较低温度确保稳定输出
-        maxTokens: 3000
+        temperature: 0.5, // 适中温度,平衡速度和质量
+        maxTokens: 2000   // 降低token数量以加快生成速度
       });
 
       const content = response.choices[0].message.content;

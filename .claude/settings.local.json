@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run dev:*)",
+      "Bash(timeout /t 3)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(taskkill /F /PID 37628)",
+      "Bash(taskkill //F //PID 37628)",
+      "Bash(ping:*)",
+      "Bash(nul)",
+      "Bash(curl:*)",
+      "Bash(psql:*)",
+      "Bash(where:*)",
+      "Bash(docker:*)",
+      "Bash(npm install:*)",
+      "Bash(taskkill /F /PID 46360)",
+      "Bash(taskkill //F //PID 46360)",
+      "Bash(timeout /t 3 /nobreak)",
+      "Bash(taskkill //F //PID 15780)",
+      "Bash(git checkout:*)",
+      "Bash(taskkill:*)",
+      "Bash(timeout:*)",
+      "Bash(git log:*)",
+      "Bash(dir /s /b *.bak *.backup *.tmp 2)",
+      "Bash(git config:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
