@@ -579,6 +579,8 @@ window.addEventListener('DOMContentLoaded', () => {
 
         // 将 summaryManager 暴露到全局，供邮件模块使用
         window.summaryManager = summaryManager;
+        console.log('📧 [Meeting] window.summaryManager 已暴露到全局:', window.summaryManager);
+        console.log('📧 [Meeting] 验证 window.summaryManager 是否可访问:', !!window.summaryManager);
 
         // 监听开始录音按钮
         const startBtn = document.getElementById('startRecording');

@@ -6,7 +6,7 @@
 console.log('📧 加载邮件发送模块');
 
 // ==================== 全局配置 ====================
-const API_BASE_URL = '/api/v1';
+const EMAIL_API_BASE_URL = '/api/v1';
 
 // ==================== 邮件发送管理器 ====================
 class EmailApp {
@@ -493,7 +493,7 @@ class EmailApp {
 
         try {
             // 调用邮件发送API
-            const response = await fetch(`${API_BASE_URL}/email/send-summary`, {
+            const response = await fetch(`${EMAIL_API_BASE_URL}/email/send-summary`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
