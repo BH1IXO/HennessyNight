@@ -16,14 +16,14 @@ try {
     maxConcurrentSessions: parseInt(process.env.MAX_CONCURRENT_SESSIONS || '10'),
     sessionTimeout: parseInt(process.env.SESSION_TIMEOUT || '3600000'),
     cleanupInterval: parseInt(process.env.CLEANUP_INTERVAL || '60000'),
-    iflytekConfig: {
-      appId: process.env.IFLYTEK_APP_ID!,
-      apiKey: process.env.IFLYTEK_API_KEY!,
-      apiSecret: process.env.IFLYTEK_API_SECRET!
+    funasrConfig: {
+      mode: (process.env.FUNASR_MODE as 'realtime' | 'offline' | '2pass') || '2pass',
+      language: process.env.FUNASR_LANGUAGE || 'zh',
+      device: (process.env.FUNASR_DEVICE as 'cpu' | 'cuda') || 'cpu'
     },
-    pyannoteConfig: {
-      modelPath: process.env.PYANNOTE_MODEL_PATH || 'pyannote/speaker-diarization',
-      device: (process.env.PYANNOTE_DEVICE as 'cpu' | 'cuda') || 'cpu'
+    speechbrainConfig: {
+      threshold: parseFloat(process.env.SPEECHBRAIN_THRESHOLD || '0.25'),
+      device: (process.env.SPEECHBRAIN_DEVICE as 'cpu' | 'cuda') || 'cpu'
     }
   });
 } catch (error) {

@@ -10,8 +10,8 @@
 
 import { RealtimeVoiceprintEngine, RealtimeEngineConfig, EngineStatus } from './RealtimeVoiceprintEngine';
 import { ITranscriptionProvider, IVoiceprintProvider } from '../providers/types';
-import { IFlytekTranscriptionProvider } from '../providers/transcription/IFlytekTranscription';
-import { PyannoteVoiceprintProvider } from '../providers/voiceprint/PyannoteVoiceprint';
+import { FunAsrTranscriptionProvider } from '../providers/transcription/FunAsrTranscription';
+import { SpeechBrainVoiceprintProvider } from '../providers/voiceprint/SpeechBrainVoiceprint';
 import { EventEmitter } from 'events';
 
 // ============= 类型定义 =============
@@ -31,15 +31,15 @@ export interface ManagerConfig {
   cleanupInterval: number;            // 清理检查间隔（毫秒）
 
   // Provider配置
-  iflytekConfig?: {
-    appId: string;
-    apiKey: string;
-    apiSecret: string;
+  funasrConfig?: {
+    mode?: 'realtime' | 'offline' | '2pass';
+    language?: string;
+    device?: 'cpu' | 'cuda';
   };
 
-  pyannoteConfig?: {
-    modelPath: string;
-    device: 'cpu' | 'cuda';
+  speechbrainConfig?: {
+    threshold?: number;
+    device?: 'cpu' | 'cuda';
   };
 }
 
@@ -281,17 +281,20 @@ export class VoiceprintEngineManager extends EventEmitter {
     // 这里使用单例Provider，多个引擎可以共享
     // 实际的连接管理在各个Provider内部进行
 
-    if (this.config.iflytekConfig) {
-      this.transcriptionProvider = new IFlytekTranscriptionProvider(
-        this.config.iflytekConfig
-      );
-    }
+    // 使用新的FunASR Provider (默认2pass模式)
+    const funasrConfig = this.config.funasrConfig || {
+      mode: '2pass',
+      language: 'zh',
+      device: 'cpu'
+    };
+    this.transcriptionProvider = new FunAsrTranscriptionProvider(funasrConfig);
 
-    if (this.config.pyannoteConfig) {
-      this.voiceprintProvider = new PyannoteVoiceprintProvider(
-        this.config.pyannoteConfig
-      );
-    }
+    // 使用新的SpeechBrain Provider (默认阈值0.25)
+    const speechbrainConfig = this.config.speechbrainConfig || {
+      threshold: 0.25,
+      device: 'cpu'
+    };
+    this.voiceprintProvider = new SpeechBrainVoiceprintProvider(speechbrainConfig);
   }
 
   /**

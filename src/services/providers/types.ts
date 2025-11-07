@@ -27,10 +27,12 @@ export interface TranscriptSegment {
 }
 
 export interface TranscriptResult {
+  text?: string;            // 完整文本（别名）
   segments: TranscriptSegment[];
   fullText: string;
   language?: string;
   duration?: number;
+  metadata?: Record<string, any>; // 额外元数据，如句子信息
 }
 
 export interface TranscriptionStatus {
@@ -44,6 +46,7 @@ export interface TranscriptionStatus {
 export interface RealtimeConfig {
   language?: string;
   sampleRate?: number;
+  onTranscript?: (text: string, isFinal: boolean) => void; // 实时转录回调
   onResult?: (result: TranscriptSegment) => void;
   onError?: (error: Error) => void;
   onComplete?: () => void;
@@ -51,7 +54,7 @@ export interface RealtimeConfig {
 
 export interface ITranscriptionProvider {
   readonly name: string;
-  readonly type: 'iflytek' | 'tencent' | 'azure' | 'whisper';
+  readonly type: 'iflytek' | 'tencent' | 'azure' | 'whisper' | 'funasr' | 'vosk';
 
   // 实时转录（WebSocket）
   startRealtime(config: RealtimeConfig): Promise<void>;
@@ -92,6 +95,7 @@ export interface EnrollmentResult {
 export interface IdentificationResult {
   identified: boolean;
   profileId?: string;
+  speakerId?: string;    // 别名，等同于profileId
   confidence?: number; // 0-1
   candidates?: Array<{
     profileId: string;
@@ -119,7 +123,7 @@ export interface DiarizationResult {
 
 export interface IVoiceprintProvider {
   readonly name: string;
-  readonly type: 'pyannote' | 'iflytek' | 'tencent' | 'azure';
+  readonly type: 'pyannote' | 'iflytek' | 'tencent' | 'azure' | 'speechbrain';
 
   // 创建声纹档案
   createProfile(userId: string): Promise<VoiceprintProfile>;

@@ -1,7 +1,15 @@
-# pyannote.audio 声纹识别依赖
+# ====================================
+# FunASR + SpeechBrain 语音识别方案
+# ====================================
 
-# 核心库
-pyannote.audio==3.1.1
+# FunASR - 阿里达摩院语音识别 (语音转文字)
+funasr>=1.0.0
+modelscope>=1.11.0
+
+# SpeechBrain - 声纹识别
+speechbrain>=0.5.16
+
+# PyTorch (核心依赖)
 torch>=2.0.0
 torchaudio>=2.0.0
 
@@ -10,15 +18,15 @@ librosa>=0.10.0
 soundfile>=0.12.1
 scipy>=1.10.0
 
-# 工具
+# 工具库
 numpy>=1.24.0
 pandas>=2.0.0
 
-# HuggingFace模型下载 (必需)
+# HuggingFace模型下载
 huggingface_hub>=0.16.0
 
-# 其他依赖
-speechbrain>=0.5.0
-pyannote.core>=5.0.0
-pyannote.database>=5.0.0
-pyannote.metrics>=3.2.0
+# 可选: 旧方案依赖 (如需回退可取消注释)
+# pyannote.audio==3.1.1
+# pyannote.core>=5.0.0
+# pyannote.database>=5.0.0
+# pyannote.metrics>=3.2.0
