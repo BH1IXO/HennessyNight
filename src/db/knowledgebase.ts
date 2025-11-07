@@ -22,7 +22,7 @@ const db = new Database(DB_PATH);
 db.exec(`
     CREATE TABLE IF NOT EXISTS terms (
         id TEXT PRIMARY KEY,
-        term TEXT NOT NULL,
+        term TEXT NOT NULL UNIQUE,
         definition TEXT NOT NULL,
         category TEXT,
         synonyms TEXT,

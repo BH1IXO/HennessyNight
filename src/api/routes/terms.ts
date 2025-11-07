@@ -1,14 +1,14 @@
 /**
  * 知识库术语管理路由
+ * 使用 SQLite 数据库
  */
 
 import { Router, Request, Response } from 'express';
-import { PrismaClient } from '@prisma/client';
 import { asyncHandler, createError } from '../middleware/errorHandler';
 import { z } from 'zod';
+import { KnowledgeBaseDB } from '../../db/knowledgebase';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // 验证Schema
 const createTermSchema = z.object({
@@ -24,30 +24,28 @@ const createTermSchema = z.object({
  * 获取术语列表
  */
 router.get('/', asyncHandler(async (req: Request, res: Response) => {
-  const { category, search, limit = '50', offset = '0' } = req.query;
+  const { category, search, limit = '100', offset = '0' } = req.query;
 
-  const where: any = {};
+  console.log('[Terms API] 获取术语列表, category:', category, 'search:', search);
 
-  if (category && typeof category === 'string') {
-    where.category = category;
-  }
+  let terms;
 
   if (search && typeof search === 'string') {
-    where.OR = [
-      { term: { contains: search, mode: 'insensitive' } },
-      { definition: { contains: search, mode: 'insensitive' } }
-    ];
+    // 如果有搜索关键词，使用搜索功能
+    terms = KnowledgeBaseDB.search(search, category as string);
+  } else {
+    // 否则获取所有词条
+    terms = KnowledgeBaseDB.getAll(parseInt(limit as string), parseInt(offset as string));
+
+    // 如果有分类筛选
+    if (category && typeof category === 'string') {
+      terms = terms.filter(t => t.category === category);
+    }
   }
 
-  const [terms, total] = await Promise.all([
-    prisma.term.findMany({
-      where,
-      take: parseInt(limit as string),
-      skip: parseInt(offset as string),
-      orderBy: { createdAt: 'desc' }
-    }),
-    prisma.term.count({ where })
-  ]);
+  const total = KnowledgeBaseDB.count();
+
+  console.log('[Terms API] 返回术语数量:', terms.length, '总数:', total);
 
   res.json({
     data: terms,
@@ -68,18 +66,13 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
 
   console.log('[Terms API] 创建术语:', validated.term);
 
-  // 检查术语是否已存在（去重）
-  const existingTerm = await prisma.term.findFirst({
-    where: {
-      term: {
-        equals: validated.term,
-        mode: 'insensitive'
-      }
-    }
-  });
+  // 先检查词条是否已存在
+  const existingTerms = KnowledgeBaseDB.search(validated.term);
+  const existingTerm = existingTerms.find(t => t.term === validated.term);
 
   if (existingTerm) {
-    console.log('[Terms API] 术语已存在，跳过:', validated.term);
+    console.log('[Terms API] 术语已存在，拒绝创建:', validated.term);
+
     res.status(200).json({
       message: '术语已存在',
       data: existingTerm,
@@ -88,23 +81,39 @@ router.post('/', asyncHandler(async (req: Request, res: Response) => {
     return;
   }
 
-  // 创建新术语
-  const term = await prisma.term.create({
-    data: {
+  try {
+    const term = KnowledgeBaseDB.create({
       term: validated.term,
       definition: validated.definition,
       category: validated.category,
-      synonyms: validated.synonyms || [],
+      synonyms: validated.synonyms,
       source: validated.source
+    });
+
+    console.log('[Terms API] 术语创建成功:', term.id);
+
+    res.status(201).json({
+      message: '术语创建成功',
+      data: term
+    });
+  } catch (error: any) {
+    // 如果是重复词条错误（SQLite的UNIQUE约束）
+    if (error.message && error.message.includes('UNIQUE')) {
+      console.log('[Terms API] 术语已存在（UNIQUE约束）:', validated.term);
+
+      // 获取已存在的词条
+      const terms = KnowledgeBaseDB.search(validated.term);
+      const term = terms.find(t => t.term === validated.term);
+
+      res.status(200).json({
+        message: '术语已存在',
+        data: term,
+        skipped: true
+      });
+    } else {
+      throw error;
     }
-  });
-
-  console.log('[Terms API] 术语创建成功:', term.id);
-
-  res.status(201).json({
-    message: '术语创建成功',
-    data: term
-  });
+  }
 }));
 
 /**
@@ -131,41 +140,29 @@ router.post('/batch', asyncHandler(async (req: Request, res: Response) => {
       // 验证数据
       const validated = createTermSchema.parse(termData);
 
-      // 检查是否已存在
-      const existingTerm = await prisma.term.findFirst({
-        where: {
-          term: {
-            equals: validated.term,
-            mode: 'insensitive'
-          }
-        }
-      });
-
-      if (existingTerm) {
-        results.skipped.push({
-          term: validated.term,
-          reason: '术语已存在'
-        });
-        continue;
-      }
-
-      // 创建术语
-      const term = await prisma.term.create({
-        data: {
-          term: validated.term,
-          definition: validated.definition,
-          category: validated.category,
-          synonyms: validated.synonyms || [],
-          source: validated.source
-        }
+      // 尝试创建术语
+      const term = KnowledgeBaseDB.create({
+        term: validated.term,
+        definition: validated.definition,
+        category: validated.category,
+        synonyms: validated.synonyms,
+        source: validated.source
       });
 
       results.created.push(term);
     } catch (error: any) {
-      results.failed.push({
-        term: termData.term,
-        reason: error.message
-      });
+      // 如果是重复词条
+      if (error.message && error.message.includes('UNIQUE')) {
+        results.skipped.push({
+          term: termData.term,
+          reason: '术语已存在'
+        });
+      } else {
+        results.failed.push({
+          term: termData.term,
+          reason: error.message
+        });
+      }
     }
   }
 
@@ -188,9 +185,7 @@ router.post('/batch', asyncHandler(async (req: Request, res: Response) => {
 router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
 
-  const term = await prisma.term.findUnique({
-    where: { id }
-  });
+  const term = KnowledgeBaseDB.getById(id);
 
   if (!term) {
     throw createError('Term not found', 404, 'TERM_NOT_FOUND');
@@ -207,10 +202,11 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
   const validated = createTermSchema.partial().parse(req.body);
 
-  const term = await prisma.term.update({
-    where: { id },
-    data: validated
-  });
+  const term = KnowledgeBaseDB.update(id, validated);
+
+  if (!term) {
+    throw createError('Term not found', 404, 'TERM_NOT_FOUND');
+  }
 
   res.json({
     message: '术语更新成功',
@@ -225,7 +221,11 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
 router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
 
-  await prisma.term.delete({ where: { id } });
+  const success = KnowledgeBaseDB.delete(id);
+
+  if (!success) {
+    throw createError('Term not found', 404, 'TERM_NOT_FOUND');
+  }
 
   console.log('[Terms API] 术语已删除:', id);
 
