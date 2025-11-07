@@ -379,18 +379,28 @@ class KnowledgeManager {
 
         console.log('[KnowledgeManager] 开始导入文件:', file.name);
 
+        const fileName = file.name.toLowerCase();
+
+        // 检查是否是文档文件（PDF/Word）
+        if (fileName.endsWith('.pdf') || fileName.endsWith('.doc') || fileName.endsWith('.docx')) {
+            await this.handleDocumentUpload(file);
+            event.target.value = '';
+            return;
+        }
+
+        // 处理结构化文件（JSON/CSV/TXT）
         try {
             const text = await file.text();
             let terms = [];
 
-            if (file.name.endsWith('.json')) {
+            if (fileName.endsWith('.json')) {
                 terms = this.parseJSON(text);
-            } else if (file.name.endsWith('.csv')) {
+            } else if (fileName.endsWith('.csv')) {
                 terms = this.parseCSV(text);
-            } else if (file.name.endsWith('.txt')) {
+            } else if (fileName.endsWith('.txt')) {
                 terms = this.parseTXT(text);
             } else {
-                alert('不支持的文件格式，请使用 JSON、CSV 或 TXT 格式');
+                alert('不支持的文件格式');
                 return;
             }
 
@@ -409,6 +419,56 @@ class KnowledgeManager {
             alert('文件导入失败: ' + error.message);
         } finally {
             event.target.value = '';
+        }
+    }
+
+    /**
+     * 处理文档上传（PDF/Word）- 使用 AI 提取术语
+     */
+    async handleDocumentUpload(file) {
+        console.log('[KnowledgeManager] 开始处理文档:', file.name);
+
+        // 显示处理中提示
+        const processingMsg = alert('正在使用 AI 分析文档，请稍候...\n这可能需要几分钟时间。');
+
+        try {
+            const formData = new FormData();
+            formData.append('document', file);
+
+            const response = await fetch(`${this.apiBaseUrl}/terms/upload-document`, {
+                method: 'POST',
+                body: formData
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                const { document: doc, extraction, results } = result.data;
+
+                let message = `📄 文档处理完成！\n\n`;
+                message += `文件: ${doc.filename}\n`;
+                message += `类型: ${doc.fileType.toUpperCase()}\n`;
+                message += `字数: ${doc.wordCount}\n\n`;
+                message += `📊 提取结果：\n`;
+                message += `- AI 提取术语: ${extraction.extracted} 条\n`;
+                message += `- 成功导入: ${extraction.created} 条\n`;
+                if (extraction.skipped > 0) {
+                    message += `- 已跳过(重复): ${extraction.skipped} 条\n`;
+                }
+                if (extraction.failed > 0) {
+                    message += `- 失败: ${extraction.failed} 条\n`;
+                }
+
+                alert(message);
+                this.loadTerms();
+
+            } else {
+                throw new Error(result.message || '文档处理失败');
+            }
+
+        } catch (error) {
+            console.error('[KnowledgeManager] 文档上传失败:', error);
+            alert('文档处理失败: ' + error.message);
         }
     }
 

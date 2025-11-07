@@ -112,7 +112,7 @@ export class DeepSeekService extends EventEmitter {
       model: config.model || 'deepseek-chat',
       temperature: config.temperature ?? 0.7,
       maxTokens: config.maxTokens || 2000,  // 降低默认token数以加快速度
-      timeout: config.timeout || 30000       // 降低超时时间到30秒
+      timeout: config.timeout || 120000      // 文档解析需要更长时间，设置为120秒
     };
 
     // 创建Axios客户端
@@ -409,6 +409,120 @@ export class DeepSeekService extends EventEmitter {
     } catch (error: any) {
       this.handleError('智能问答失败', error);
       throw error;
+    }
+  }
+
+  // ============= 知识库文档解析 =============
+
+  /**
+   * 从文档内容中提取专业术语
+   * 返回 JSON 格式的术语列表
+   */
+  async extractTermsFromDocument(documentText: string, category?: string): Promise<Array<{
+    term: string;
+    definition: string;
+    category?: string;
+    synonyms?: string[];
+  }>> {
+    try {
+      console.log('[DeepSeek] 开始提取文档术语, 文本长度:', documentText.length);
+
+      const systemPrompt = `你是一个专业的知识提取专家。从提供的文档内容中提取所有专业术语和关键概念。
+
+要求：
+1. 识别文档中的专业术语、技术词汇、关键概念
+2. 为每个术语提供清晰准确的定义
+3. 定义应该基于文档内容，简洁明了（1-3句话）
+4. 如果有同义词或相关术语，一并列出
+5. 返回严格的 JSON 数组格式
+
+输出格式（必须是有效的 JSON）：
+[
+  {
+    "term": "术语名称",
+    "definition": "术语定义说明",
+    "category": "${category || '通用'}",
+    "synonyms": ["同义词1", "同义词2"]
+  }
+]
+
+注意：
+- 只返回 JSON，不要有任何额外文字
+- 确保 JSON 格式正确，可以被 JSON.parse() 解析
+- 每个术语都必须有 term 和 definition 字段
+- synonyms 字段可选，如果没有同义词可以省略或返回空数组`;
+
+      const userPrompt = `请从以下文档中提取专业术语：
+
+文档内容：
+${documentText.substring(0, 8000)} ${documentText.length > 8000 ? '...(内容过长已截断)' : ''}
+
+请返回 JSON 格式的术语列表。`;
+
+      const response = await this.chatCompletion({
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        temperature: 0.3,
+        maxTokens: 4000
+      });
+
+      const content = response.choices[0].message.content;
+      console.log('[DeepSeek] AI 响应:', content.substring(0, 200));
+
+      // 解析 JSON
+      const terms = this.parseTermsFromJSON(content);
+
+      console.log('[DeepSeek] 成功提取术语数量:', terms.length);
+
+      return terms;
+
+    } catch (error: any) {
+      this.handleError('提取文档术语失败', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 从 AI 响应中解析术语 JSON
+   */
+  private parseTermsFromJSON(content: string): Array<{
+    term: string;
+    definition: string;
+    category?: string;
+    synonyms?: string[];
+  }> {
+    try {
+      // 尝试直接解析
+      const parsed = JSON.parse(content);
+      if (Array.isArray(parsed)) {
+        return parsed.filter(item => item.term && item.definition);
+      }
+
+      // 如果是对象包含 terms 字段
+      if (parsed.terms && Array.isArray(parsed.terms)) {
+        return parsed.terms.filter(item => item.term && item.definition);
+      }
+
+      throw new Error('无效的 JSON 格式');
+
+    } catch (error) {
+      // 尝试提取 JSON 数组
+      const jsonMatch = content.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (Array.isArray(parsed)) {
+            return parsed.filter(item => item.term && item.definition);
+          }
+        } catch (e) {
+          console.error('[DeepSeek] JSON 提取失败:', e);
+        }
+      }
+
+      console.error('[DeepSeek] 无法解析术语 JSON:', content.substring(0, 500));
+      throw new Error('AI 返回的内容无法解析为术语列表');
     }
   }
 

@@ -7,8 +7,59 @@ import { Router, Request, Response } from 'express';
 import { asyncHandler, createError } from '../middleware/errorHandler';
 import { z } from 'zod';
 import { KnowledgeBaseDB } from '../../db/knowledgebase';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+import { DocumentParser } from '../../services/document/DocumentParser';
+import { DeepSeekService } from '../../services/ai/DeepSeekService';
 
 const router = Router();
+
+// 配置文件上传
+const uploadDir = path.join(process.cwd(), 'uploads', 'documents');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({
+  storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['.pdf', '.doc', '.docx'];
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (allowedTypes.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error('只支持 PDF 和 Word 文档'));
+    }
+  }
+});
+
+// DeepSeek 服务实例
+let deepseekService: DeepSeekService | null = null;
+try {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (apiKey) {
+    deepseekService = new DeepSeekService({ apiKey });
+    console.log('✅ DeepSeek 服务已初始化');
+  } else {
+    console.warn('⚠️  DEEPSEEK_API_KEY 未设置，文档解析功能将不可用');
+  }
+} catch (error) {
+  console.error('❌ DeepSeek 服务初始化失败:', error);
+}
 
 // 验证Schema
 const createTermSchema = z.object({
@@ -230,6 +281,133 @@ router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
   console.log('[Terms API] 术语已删除:', id);
 
   res.json({ message: '术语删除成功' });
+}));
+
+/**
+ * POST /api/v1/terms/upload-document
+ * 上传文档并使用 AI 提取术语
+ */
+router.post('/upload-document', upload.single('document'), asyncHandler(async (req: Request, res: Response) => {
+  const file = req.file;
+
+  if (!file) {
+    throw createError('请上传文件', 400, 'FILE_REQUIRED');
+  }
+
+  if (!deepseekService) {
+    throw createError('AI 服务不可用，请检查 DEEPSEEK_API_KEY 配置', 503, 'AI_SERVICE_UNAVAILABLE');
+  }
+
+  const { category } = req.body;
+
+  console.log('[Terms API] 开始处理文档上传:', {
+    filename: file.originalname,
+    size: file.size,
+    path: file.path
+  });
+
+  try {
+    // 1. 解析文档
+    const parsedDoc = await DocumentParser.parse(file.path, file.originalname);
+    console.log('[Terms API] 文档解析完成:', {
+      fileType: parsedDoc.fileType,
+      wordCount: parsedDoc.wordCount,
+      textLength: parsedDoc.text.length
+    });
+
+    // 2. 清理文本
+    const cleanedText = DocumentParser.cleanText(parsedDoc.text);
+
+    // 3. 使用 AI 提取术语
+    console.log('[Terms API] 开始 AI 提取术语...');
+    const extractedTerms = await deepseekService.extractTermsFromDocument(cleanedText, category);
+
+    console.log('[Terms API] AI 提取完成，术语数量:', extractedTerms.length);
+
+    // 4. 批量导入术语
+    const importResults = {
+      created: [] as any[],
+      skipped: [] as any[],
+      failed: [] as any[]
+    };
+
+    for (const termData of extractedTerms) {
+      try {
+        // 检查是否已存在
+        const existingTerms = KnowledgeBaseDB.search(termData.term);
+        const existingTerm = existingTerms.find(t => t.term === termData.term);
+
+        if (existingTerm) {
+          importResults.skipped.push({
+            term: termData.term,
+            reason: '术语已存在'
+          });
+          continue;
+        }
+
+        // 创建术语
+        const term = KnowledgeBaseDB.create({
+          term: termData.term,
+          definition: termData.definition,
+          category: termData.category || category,
+          synonyms: termData.synonyms,
+          source: file.originalname
+        });
+
+        importResults.created.push(term);
+
+      } catch (error: any) {
+        importResults.failed.push({
+          term: termData.term,
+          reason: error.message
+        });
+      }
+    }
+
+    // 5. 删除上传的文件
+    try {
+      fs.unlinkSync(file.path);
+      console.log('[Terms API] 临时文件已删除:', file.path);
+    } catch (error) {
+      console.error('[Terms API] 删除临时文件失败:', error);
+    }
+
+    console.log('[Terms API] 文档处理完成:', {
+      created: importResults.created.length,
+      skipped: importResults.skipped.length,
+      failed: importResults.failed.length
+    });
+
+    res.json({
+      message: '文档处理完成',
+      data: {
+        document: {
+          filename: file.originalname,
+          fileType: parsedDoc.fileType,
+          wordCount: parsedDoc.wordCount
+        },
+        extraction: {
+          extracted: extractedTerms.length,
+          created: importResults.created.length,
+          skipped: importResults.skipped.length,
+          failed: importResults.failed.length
+        },
+        results: importResults
+      }
+    });
+
+  } catch (error: any) {
+    // 出错时删除上传的文件
+    try {
+      if (file && file.path) {
+        fs.unlinkSync(file.path);
+      }
+    } catch (unlinkError) {
+      console.error('[Terms API] 删除临时文件失败:', unlinkError);
+    }
+
+    throw error;
+  }
 }));
 
 export default router;
