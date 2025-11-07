@@ -62,7 +62,11 @@
       "Bash(\"./pyannote-env/Scripts/python.exe\":*)",
       "Bash(\"./pyannote-env/Scripts/python.exe\" 3dspeaker_service.py test)",
       "Bash(\"./pyannote-env/Scripts/python.exe\" -m pip install addict)",
-      "Bash(\"./pyannote-env/Scripts/python.exe\" -m pip install datasets sortedcontainers simplejson oss2)"
+      "Bash(\"./pyannote-env/Scripts/python.exe\" -m pip install datasets sortedcontainers simplejson oss2)",
+      "Bash(\"./pyannote-env/Scripts/python.exe\" -m pip install wespeaker)",
+      "Bash(\"./pyannote-env/Scripts/python.exe\" -m pip install git+https://github.com/wenet-e2e/wespeaker.git)",
+      "Bash(\"./pyannote-env/Scripts/python.exe\" wespeaker_service.py test)",
+      "Bash(\"./pyannote-env/Scripts/python.exe\" -c \\\"import wespeaker; print(''WeSpeaker version:'', wespeaker.__version__); print(''✅ WeSpeaker安装成功'')\\\")"
     ],
     "deny": [],
     "ask": []

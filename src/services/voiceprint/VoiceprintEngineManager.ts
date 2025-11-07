@@ -11,7 +11,7 @@
 import { RealtimeVoiceprintEngine, RealtimeEngineConfig, EngineStatus } from './RealtimeVoiceprintEngine';
 import { ITranscriptionProvider, IVoiceprintProvider } from '../providers/types';
 import { FunAsrTranscriptionProvider } from '../providers/transcription/FunAsrTranscription';
-import { ThreeDSpeakerVoiceprintProvider } from '../providers/voiceprint/ThreeDSpeakerVoiceprint';
+import { WeSpeakerVoiceprintProvider } from '../providers/voiceprint/WeSpeakerVoiceprint';
 import { EventEmitter } from 'events';
 
 // ============= 类型定义 =============
@@ -37,8 +37,8 @@ export interface ManagerConfig {
     device?: 'cpu' | 'cuda';
   };
 
-  threeDSpeakerConfig?: {
-    modelId?: string;
+  wespeakerConfig?: {
+    modelType?: 'chinese' | 'english';
     threshold?: number;
     device?: 'cpu' | 'cuda';
   };
@@ -290,15 +290,15 @@ export class VoiceprintEngineManager extends EventEmitter {
     };
     this.transcriptionProvider = new FunAsrTranscriptionProvider(funasrConfig);
 
-    // 使用3D-Speaker Provider (阿里达摩院，针对中文优化，默认阈值0.50)
-    const threeDSpeakerConfig = this.config.threeDSpeakerConfig || {
-      modelId: 'iic/speech_eres2net_sv_zh-cn_16k-common',
+    // 使用WeSpeaker Provider (WeNet团队，CNSRC 2022冠军，EER 0.723%，默认阈值0.50)
+    const wespeakerConfig = this.config.wespeakerConfig || {
+      modelType: 'chinese',
       threshold: 0.50,
       device: 'cpu'
     };
-    this.voiceprintProvider = new ThreeDSpeakerVoiceprintProvider(threeDSpeakerConfig);
+    this.voiceprintProvider = new WeSpeakerVoiceprintProvider(wespeakerConfig);
 
-    console.log('✅ Providers已初始化: FunASR + 3D-Speaker (阿里达摩院技术栈)');
+    console.log('✅ Providers已初始化: FunASR + WeSpeaker (业界顶尖声纹识别)');
   }
 
   /**

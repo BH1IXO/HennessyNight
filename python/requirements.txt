@@ -1,13 +1,13 @@
 # ====================================
-# FunASR + 3D-Speaker 语音识别方案 (阿里达摩院技术栈)
+# FunASR + WeSpeaker 语音识别方案
 # ====================================
 
 # FunASR - 阿里达摩院语音识别 (语音转文字)
 funasr>=1.0.0
 
-# 3D-Speaker - 阿里达摩院声纹识别 (中文优化)
-# modelscope包含3D-Speaker模型和Pipeline
-modelscope>=1.11.0
+# WeSpeaker - WeNet声纹识别 (CNSRC 2022冠军，EER 0.723%)
+# 安装命令: pip install git+https://github.com/wenet-e2e/wespeaker.git
+# wespeaker (从GitHub安装)
 
 # ModelScope依赖
 addict
@@ -33,6 +33,9 @@ pandas>=2.0.0
 huggingface_hub>=0.16.0
 
 # 可选: 备选方案依赖 (如需使用可取消注释)
+# 3D-Speaker - 阿里达摩院声纹识别 (备选)
+# modelscope>=1.11.0
+#
 # SpeechBrain - 声纹识别 (备选)
 # speechbrain>=0.5.16
 #
