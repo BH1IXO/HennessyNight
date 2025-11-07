@@ -19,6 +19,8 @@ export interface EmailConfig {
 
 export interface SendMeetingSummaryEmailOptions {
   recipients: string[];           // 收件人邮箱列表
+  cc?: string[];                  // 抄送列表
+  bcc?: string[];                 // 密送列表
   subject: string;                // 邮件主题
   summary: MeetingSummary;        // 会议纪要内容
   meetingDate?: string;           // 会议日期
@@ -47,7 +49,7 @@ export class EmailService {
    * 发送会议纪要邮件
    */
   async sendMeetingSummaryEmail(options: SendMeetingSummaryEmailOptions): Promise<void> {
-    const { recipients, subject, summary, meetingDate } = options;
+    const { recipients, cc, bcc, subject, summary, meetingDate } = options;
 
     // 验证收件人
     if (!recipients || recipients.length === 0) {
@@ -61,16 +63,34 @@ export class EmailService {
     const textContent = this.generateMeetingSummaryText(summary);
 
     try {
-      const info = await this.transporter.sendMail({
+      const mailOptions: any = {
         from: this.config.from,
         to: recipients.join(', '),
         subject: subject,
         text: textContent,
         html: htmlContent
-      });
+      };
+
+      // 添加抄送
+      if (cc && cc.length > 0) {
+        mailOptions.cc = cc.join(', ');
+      }
+
+      // 添加密送
+      if (bcc && bcc.length > 0) {
+        mailOptions.bcc = bcc.join(', ');
+      }
+
+      const info = await this.transporter.sendMail(mailOptions);
 
       console.log('[EmailService] 邮件发送成功:', info.messageId);
       console.log('[EmailService] 收件人:', recipients.join(', '));
+      if (cc && cc.length > 0) {
+        console.log('[EmailService] 抄送:', cc.join(', '));
+      }
+      if (bcc && bcc.length > 0) {
+        console.log('[EmailService] 密送:', bcc.length, '人');
+      }
     } catch (error: any) {
       console.error('[EmailService] 邮件发送失败:', error.message);
       throw new Error(`邮件发送失败: ${error.message}`);

@@ -810,6 +810,52 @@
             min-height: 200px;
         }
 
+        /* 邮件表单样式 */
+        .email-form {
+            padding: 10px;
+        }
+
+        .email-form .form-group {
+            margin-bottom: 20px;
+        }
+
+        .email-form .form-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            color: var(--dark);
+            margin-bottom: 8px;
+            font-size: 0.95rem;
+        }
+
+        .email-form .form-label i {
+            color: var(--primary);
+        }
+
+        .email-preview-box {
+            transition: var(--transition);
+        }
+
+        .email-preview-box:hover {
+            border-color: var(--primary) !important;
+        }
+
+        /* 美化邮件预览内容 */
+        .email-preview-box h1,
+        .email-preview-box h2,
+        .email-preview-box h3 {
+            line-height: 1.4;
+        }
+
+        .email-preview-box ul {
+            margin: 10px 0;
+        }
+
+        .email-preview-box li {
+            margin-bottom: 8px;
+        }
+
         /* 说话人标签样式 */
         .speaker-label {
             display: flex;
@@ -1221,23 +1267,58 @@
                             </div>
 
                             <div class="tab-pane" id="email-tab">
-                                <div class="email-preview">
-                                    <p><strong>收件人:</strong></p>
-                                    <div class="email-recipients" id="emailRecipients">
-                                        <!-- 收件人自动生成 -->
+                                <div class="email-form">
+                                    <div class="form-group">
+                                        <label class="form-label">
+                                            <i class="fas fa-users"></i> 收件人 <span style="color: var(--accent);">*</span>
+                                        </label>
+                                        <input type="text" class="form-input" id="emailRecipients" placeholder="多个邮箱用逗号分隔，例如：user1@example.com, user2@example.com">
+                                        <small style="color: var(--gray); font-size: 0.85rem; display: block; margin-top: 5px;">
+                                            <i class="fas fa-info-circle"></i> 系统将自动从会议记录中提取参会人邮箱作为默认收件人
+                                        </small>
                                     </div>
 
-                                    <div class="email-subject" id="emailSubject">
-                                        项目进度会议纪要 - 2025年10月27日
+                                    <div class="form-group">
+                                        <label class="form-label">
+                                            <i class="fas fa-user-friends"></i> 抄送 (CC)
+                                        </label>
+                                        <input type="text" class="form-input" id="emailCC" placeholder="多个邮箱用逗号分隔（可选）">
                                     </div>
 
-                                    <div class="email-body" id="emailBody">
-                                        <p>邮件正文将包含生成的会议纪要。</p>
+                                    <div class="form-group">
+                                        <label class="form-label">
+                                            <i class="fas fa-user-secret"></i> 密送 (BCC)
+                                        </label>
+                                        <input type="text" class="form-input" id="emailBCC" placeholder="多个邮箱用逗号分隔（可选）">
                                     </div>
 
-                                    <button class="btn btn-success" id="confirmSendEmail" style="margin-top: 20px;">
-                                        <i class="fas fa-paper-plane"></i> 确认发送
-                                    </button>
+                                    <div class="form-group">
+                                        <label class="form-label">
+                                            <i class="fas fa-heading"></i> 邮件标题 <span style="color: var(--accent);">*</span>
+                                        </label>
+                                        <input type="text" class="form-input" id="emailSubject" placeholder="例如：项目进度会议纪要 - 2025年11月7日">
+                                    </div>
+
+                                    <div class="form-group">
+                                        <label class="form-label">
+                                            <i class="fas fa-file-alt"></i> 邮件内容预览
+                                        </label>
+                                        <div class="email-preview-box" id="emailContentPreview" style="padding: 20px; background: var(--light); border-radius: 8px; min-height: 300px; max-height: 500px; overflow-y: auto; border: 2px solid var(--light-gray);">
+                                            <div class="empty-state">
+                                                <i class="fas fa-inbox"></i>
+                                                <p>生成会议纪要后，邮件内容将在此预览</p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div style="display: flex; gap: 15px; margin-top: 20px;">
+                                        <button class="btn btn-success" id="sendEmailBtn" style="flex: 1;">
+                                            <i class="fas fa-paper-plane"></i> 发送邮件
+                                        </button>
+                                        <button class="btn btn-info" id="refreshPreviewBtn">
+                                            <i class="fas fa-sync-alt"></i> 刷新预览
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1441,5 +1522,7 @@
     <script src="./meeting-app.js?v=10"></script>
     <!-- 知识库管理模块 -->
     <script src="./knowledge-manager.js?v=11"></script>
+    <!-- 邮件发送模块 -->
+    <script src="./email-app.js?v=1"></script>
 </body>
 </html>

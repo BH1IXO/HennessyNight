@@ -19,6 +19,7 @@ import summariesRouter from './api/routes/summaries';
 import audioRouter from './api/routes/audio';
 import sessionsRouter from './api/routes/sessions';
 import termsRouter from './api/routes/terms';
+import emailRouter from './api/routes/email';
 import healthRouter from './api/routes/health';
 
 // 导入中间件
@@ -92,6 +93,7 @@ export function createApp(): Express {
   app.use(`${API_PREFIX}/audio`, audioRouter);
   app.use(`${API_PREFIX}/sessions`, sessionsRouter);
   app.use(`${API_PREFIX}/terms`, termsRouter);
+  app.use(`${API_PREFIX}/email`, emailRouter);
 
   // 根路由 - 前端页面由静态文件中间件自动处理
   // 如果访问根路径且没有找到 index.html，显示API信息
