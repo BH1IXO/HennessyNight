@@ -20,13 +20,17 @@ class EmailApp {
      * 初始化邮件发送模块
      */
     init() {
-        console.log('📧 初始化邮件发送模块');
+        console.log('📧 [Email] ========== 初始化邮件发送模块 ==========');
+        console.log('📧 [Email] window.summaryManager 存在?', !!window.summaryManager);
+        console.log('📧 [Email] window 对象:', window);
 
         // 绑定事件监听器
         this.bindEvents();
 
         // 监听会议纪要生成事件
         this.listenForSummaryUpdates();
+
+        console.log('📧 [Email] ========== 初始化完成 ==========');
     }
 
     /**
@@ -59,16 +63,30 @@ class EmailApp {
      * 监听会议纪要更新
      */
     listenForSummaryUpdates() {
+        console.log('📧 [Email] 开始监听会议纪要更新');
+
         // 监听全局的 summaryManager 更新
         const checkSummary = () => {
+            console.log('📧 [Email] 检查 summaryManager:', {
+                hasSummaryManager: !!window.summaryManager,
+                hasCurrentSummary: !!(window.summaryManager && window.summaryManager.currentSummary),
+                currentSummary: window.summaryManager?.currentSummary
+            });
+
             if (window.summaryManager && window.summaryManager.currentSummary) {
+                console.log('📧 [Email] 发现会议纪要,准备更新邮件内容');
                 this.currentSummary = window.summaryManager.currentSummary;
                 this.updateEmailContent();
+            } else {
+                console.log('📧 [Email] 尚未发现会议纪要');
             }
         };
 
+        // 立即检查一次
+        checkSummary();
+
         // 定期检查
-        setInterval(checkSummary, 1000);
+        setInterval(checkSummary, 2000);
     }
 
     /**
@@ -140,12 +158,15 @@ class EmailApp {
      * 更新邮件内容（标题、收件人、预览）
      */
     async updateEmailContent() {
+        console.log('📧 [Email] updateEmailContent 被调用');
+        console.log('📧 [Email] this.currentSummary:', this.currentSummary);
+
         if (!this.currentSummary) {
-            console.log('📧 没有会议纪要，跳过更新');
+            console.log('📧 [Email] 没有会议纪要，跳过更新');
             return;
         }
 
-        console.log('📧 更新邮件内容');
+        console.log('📧 [Email] 开始更新邮件内容,会议纪要:', this.currentSummary);
 
         // 获取参会人员
         const voiceprintAttendees = await this.getAttendeesFromVoiceprint();
@@ -228,11 +249,20 @@ class EmailApp {
      * 更新邮件内容预览
      */
     updateEmailPreview() {
+        console.log('📧 [Email] updateEmailPreview 被调用');
         const previewBox = document.getElementById('emailContentPreview');
-        if (!previewBox) return;
+        console.log('📧 [Email] previewBox 元素:', previewBox);
+
+        if (!previewBox) {
+            console.error('📧 [Email] 找不到 emailContentPreview 元素!');
+            return;
+        }
 
         const summary = this.currentSummary;
+        console.log('📧 [Email] 当前会议纪要:', summary);
+
         if (!summary) {
+            console.log('📧 [Email] 没有会议纪要,显示空状态');
             previewBox.innerHTML = `
                 <div class="empty-state">
                     <i class="fas fa-inbox"></i>
@@ -243,10 +273,12 @@ class EmailApp {
         }
 
         // 构建邮件HTML内容
+        console.log('📧 [Email] 开始构建邮件HTML');
         const emailHTML = this.buildEmailHTML(summary);
+        console.log('📧 [Email] 邮件HTML长度:', emailHTML.length);
         previewBox.innerHTML = emailHTML;
 
-        console.log('📧 邮件预览已更新');
+        console.log('📧 [Email] ✅ 邮件预览已更新成功!');
     }
 
     /**
