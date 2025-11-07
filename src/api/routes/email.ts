@@ -9,15 +9,27 @@ import { MeetingSummary } from '@/services/ai/DeepSeekService';
 
 const router = Router();
 
-// 初始化邮件服务
-const emailService = new EmailService({
-  host: process.env.SMTP_HOST || 'smtp.163.com',
-  port: parseInt(process.env.SMTP_PORT || '465'),
-  secure: process.env.SMTP_SECURE !== 'false',  // 默认为true
-  user: process.env.SMTP_USER || 'henessynight@163.com',
-  pass: process.env.SMTP_PASS || '',
-  from: process.env.EMAIL_FROM || '会议纪要系统 <henessynight@163.com>'
-});
+// 获取邮件服务实例的函数（延迟初始化，确保能读取到正确的环境变量）
+function getEmailService(): EmailService {
+  // 直接从 .env 中读取配置（已经被 dotenv 加载）
+  const config = {
+    host: process.env.SMTP_HOST || 'smtp.163.com',
+    port: parseInt(process.env.SMTP_PORT || '465'),
+    secure: process.env.SMTP_SECURE !== 'false',  // 默认为true
+    user: process.env.SMTP_USER || 'hennessynight@163.com',
+    pass: process.env.SMTP_PASS || '',
+    from: process.env.EMAIL_FROM || '会议纪要系统 <hennessynight@163.com>'
+  };
+
+  console.log('[Email Route] 创建EmailService实例，配置:', {
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    passLength: config.pass?.length
+  });
+
+  return new EmailService(config);
+}
 
 /**
  * POST /api/v1/email/send-summary
@@ -76,7 +88,8 @@ router.post('/send-summary', asyncHandler(async (req: Request, res: Response) =>
   console.log(`[Email API] 邮件主题: ${subject}`);
 
   try {
-    // 发送邮件
+    // 发送邮件（使用延迟初始化的EmailService）
+    const emailService = getEmailService();
     await emailService.sendMeetingSummaryEmail({
       recipients,
       cc,
@@ -117,6 +130,7 @@ router.get('/test-connection', asyncHandler(async (req: Request, res: Response) 
   console.log('[Email API] 测试SMTP连接');
 
   try {
+    const emailService = getEmailService();
     const isConnected = await emailService.verifyConnection();
 
     if (isConnected) {

@@ -1,8 +1,19 @@
+// 首先加载环境变量 - 必须在所有imports之前！
+require('dotenv').config({ override: true });
+
 /**
  * Express Application 配置
  *
  * 主应用入口，配置中间件、路由和错误处理
  */
+
+// 调试环境变量加载结果
+console.log('[App.ts] 环境变量已加载（override=true）');
+console.log('[App.ts] SMTP配置:');
+console.log(`  SMTP_HOST = '${process.env.SMTP_HOST}'`);
+console.log(`  SMTP_PORT = '${process.env.SMTP_PORT}'`);
+console.log(`  SMTP_USER = '${process.env.SMTP_USER}'`);
+console.log(`  SMTP_PASS length = ${process.env.SMTP_PASS?.length || 0}`);
 
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';

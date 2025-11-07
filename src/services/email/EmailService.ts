@@ -33,16 +33,31 @@ export class EmailService {
   constructor(config: EmailConfig) {
     this.config = config;
 
+    console.log('[EmailService] 初始化邮件服务配置:');
+    console.log(`  - SMTP服务器: ${config.host}`);
+    console.log(`  - 端口: ${config.port}`);
+    console.log(`  - 安全连接: ${config.secure}`);
+    console.log(`  - 用户名: ${config.user}`);
+    console.log(`  - 密码长度: ${config.pass?.length || 0}`);
+    console.log(`  - 密码前4位: ${config.pass?.substring(0, 4) || 'N/A'}`);
+    console.log(`  - 发件人: ${config.from}`);
+
     // 创建邮件传输器 (注意: nodemailer 7.x 使用 createTransport 而不是 createTransporter)
+    // 163邮箱需要SSL连接，端口465
     this.transporter = nodemailer.createTransport({
       host: config.host,
       port: config.port,
-      secure: config.secure,
+      secure: config.secure, // 465端口使用true
       auth: {
         user: config.user,
         pass: config.pass
-      }
+      },
+      // 添加调试信息
+      logger: true,
+      debug: true
     });
+
+    console.log('[EmailService] Transporter配置完成');
   }
 
   /**
