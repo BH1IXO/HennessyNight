@@ -29,7 +29,21 @@
       "Bash(git push:*)",
       "Bash(npx tsc:*)",
       "Bash(del /F \"D:\\Hennessy.Night\\HennessyNight\\data\\knowledgebase.db\")",
-      "Bash(cmd /c del /F \"D:\\Hennessy.Night\\HennessyNight\\data\\knowledgebase.db\")"
+      "Bash(cmd /c del /F \"D:\\Hennessy.Night\\HennessyNight\\data\\knowledgebase.db\")",
+      "Bash(dir /s /b .env*)",
+      "Bash(set:*)",
+      "Bash(export SMTP_HOST=smtp.163.com)",
+      "Bash(export SMTP_PORT=465)",
+      "Bash(export SMTP_SECURE=true)",
+      "Bash(export SMTP_USER=henessynight@163.com)",
+      "Bash(export SMTP_PASS=XPain32a9Wg8dfvz)",
+      "Bash(export EMAIL_FROM=\"会议纪要系统 <henessynight@163.com>\")",
+      "Bash(node test-163-email.js:*)",
+      "Bash(node test-163-alternative.js:*)",
+      "Bash(dir E:)",
+      "Bash(dir:*)",
+      "Bash(tasklist:*)",
+      "Bash(git merge HennessynightToddliu --no-ff -m \"$(cat <<''EOF''\nMerge branch ''HennessynightToddliu'': 修复163邮箱SMTP配置\n\n合并邮箱配置修复分支，主要改进：\n- 修复邮箱地址拼写错误\n- 优化环境变量加载机制\n- 改进EmailService初始化方式\n- 添加调试日志支持\n- 163邮箱SMTP测试通过\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")"
     ],
     "deny": [],
     "ask": []
