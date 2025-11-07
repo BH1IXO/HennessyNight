@@ -123,7 +123,7 @@ export interface DiarizationResult {
 
 export interface IVoiceprintProvider {
   readonly name: string;
-  readonly type: 'pyannote' | 'iflytek' | 'tencent' | 'azure' | 'speechbrain';
+  readonly type: 'pyannote' | 'iflytek' | 'tencent' | 'azure' | 'speechbrain' | '3dspeaker';
 
   // 创建声纹档案
   createProfile(userId: string): Promise<VoiceprintProfile>;

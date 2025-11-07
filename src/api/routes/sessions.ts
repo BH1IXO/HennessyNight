@@ -21,11 +21,13 @@ try {
       language: process.env.FUNASR_LANGUAGE || 'zh',
       device: (process.env.FUNASR_DEVICE as 'cpu' | 'cuda') || 'cpu'
     },
-    speechbrainConfig: {
-      threshold: parseFloat(process.env.SPEECHBRAIN_THRESHOLD || '0.25'),
-      device: (process.env.SPEECHBRAIN_DEVICE as 'cpu' | 'cuda') || 'cpu'
+    threeDSpeakerConfig: {
+      modelId: process.env.THREEDS_MODEL_ID || 'iic/speech_eres2net_sv_zh-cn_16k-common',
+      threshold: parseFloat(process.env.THREEDS_THRESHOLD || '0.50'),
+      device: (process.env.THREEDS_DEVICE as 'cpu' | 'cuda') || 'cpu'
     }
   });
+  console.log('✅ 引擎管理器初始化成功: FunASR + 3D-Speaker');
 } catch (error) {
   console.error('❌ 初始化引擎管理器失败:', error);
 }

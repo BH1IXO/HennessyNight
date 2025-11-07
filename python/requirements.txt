@@ -1,13 +1,20 @@
 # ====================================
-# FunASR + SpeechBrain 语音识别方案
+# FunASR + 3D-Speaker 语音识别方案 (阿里达摩院技术栈)
 # ====================================
 
 # FunASR - 阿里达摩院语音识别 (语音转文字)
 funasr>=1.0.0
+
+# 3D-Speaker - 阿里达摩院声纹识别 (中文优化)
+# modelscope包含3D-Speaker模型和Pipeline
 modelscope>=1.11.0
 
-# SpeechBrain - 声纹识别
-speechbrain>=0.5.16
+# ModelScope依赖
+addict
+datasets
+sortedcontainers
+simplejson
+oss2
 
 # PyTorch (核心依赖)
 torch>=2.0.0
@@ -25,7 +32,11 @@ pandas>=2.0.0
 # HuggingFace模型下载
 huggingface_hub>=0.16.0
 
-# 可选: 旧方案依赖 (如需回退可取消注释)
+# 可选: 备选方案依赖 (如需使用可取消注释)
+# SpeechBrain - 声纹识别 (备选)
+# speechbrain>=0.5.16
+#
+# pyannote.audio - 声纹识别 (旧方案)
 # pyannote.audio==3.1.1
 # pyannote.core>=5.0.0
 # pyannote.database>=5.0.0

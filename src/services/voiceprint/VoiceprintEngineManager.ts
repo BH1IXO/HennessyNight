@@ -11,7 +11,7 @@
 import { RealtimeVoiceprintEngine, RealtimeEngineConfig, EngineStatus } from './RealtimeVoiceprintEngine';
 import { ITranscriptionProvider, IVoiceprintProvider } from '../providers/types';
 import { FunAsrTranscriptionProvider } from '../providers/transcription/FunAsrTranscription';
-import { SpeechBrainVoiceprintProvider } from '../providers/voiceprint/SpeechBrainVoiceprint';
+import { ThreeDSpeakerVoiceprintProvider } from '../providers/voiceprint/ThreeDSpeakerVoiceprint';
 import { EventEmitter } from 'events';
 
 // ============= 类型定义 =============
@@ -37,7 +37,8 @@ export interface ManagerConfig {
     device?: 'cpu' | 'cuda';
   };
 
-  speechbrainConfig?: {
+  threeDSpeakerConfig?: {
+    modelId?: string;
     threshold?: number;
     device?: 'cpu' | 'cuda';
   };
@@ -281,7 +282,7 @@ export class VoiceprintEngineManager extends EventEmitter {
     // 这里使用单例Provider，多个引擎可以共享
     // 实际的连接管理在各个Provider内部进行
 
-    // 使用新的FunASR Provider (默认2pass模式)
+    // 使用FunASR Provider (默认2pass模式)
     const funasrConfig = this.config.funasrConfig || {
       mode: '2pass',
       language: 'zh',
@@ -289,12 +290,15 @@ export class VoiceprintEngineManager extends EventEmitter {
     };
     this.transcriptionProvider = new FunAsrTranscriptionProvider(funasrConfig);
 
-    // 使用新的SpeechBrain Provider (默认阈值0.25)
-    const speechbrainConfig = this.config.speechbrainConfig || {
-      threshold: 0.25,
+    // 使用3D-Speaker Provider (阿里达摩院，针对中文优化，默认阈值0.50)
+    const threeDSpeakerConfig = this.config.threeDSpeakerConfig || {
+      modelId: 'iic/speech_eres2net_sv_zh-cn_16k-common',
+      threshold: 0.50,
       device: 'cpu'
     };
-    this.voiceprintProvider = new SpeechBrainVoiceprintProvider(speechbrainConfig);
+    this.voiceprintProvider = new ThreeDSpeakerVoiceprintProvider(threeDSpeakerConfig);
+
+    console.log('✅ Providers已初始化: FunASR + 3D-Speaker (阿里达摩院技术栈)');
   }
 
   /**

@@ -59,7 +59,10 @@
       "Bash(\"./pyannote-env/Scripts/python.exe\" -m pip install speechbrain huggingface_hub)",
       "Bash(\"./pyannote-env/Scripts/python.exe\" -c \"import speechbrain; print(''SpeechBrain version:'', speechbrain.__version__); print(''SpeechBrain successfully installed'')\")",
       "Bash(\"./pyannote-env/Scripts/python.exe\" -m pip install sox)",
-      "Bash(\"./pyannote-env/Scripts/python.exe\":*)"
+      "Bash(\"./pyannote-env/Scripts/python.exe\":*)",
+      "Bash(\"./pyannote-env/Scripts/python.exe\" 3dspeaker_service.py test)",
+      "Bash(\"./pyannote-env/Scripts/python.exe\" -m pip install addict)",
+      "Bash(\"./pyannote-env/Scripts/python.exe\" -m pip install datasets sortedcontainers simplejson oss2)"
     ],
     "deny": [],
     "ask": []
