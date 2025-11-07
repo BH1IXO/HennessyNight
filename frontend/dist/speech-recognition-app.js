@@ -472,12 +472,8 @@ window.saveSpeaker = function() {
     }
 };
 
-// 保存词条
-window.saveTerm = function() {
-    // 词条保存功能暂不实现（需要数据库）
-    alert('词条保存功能需要数据库支持，当前版本暂不可用');
-    closeModal('addTermModal');
-};
+// saveTerm 函数已移至 knowledge-manager.js
+// window.saveTerm 会在 knowledge-manager.js 中定义
 
 // ==================== 声纹管理器 ====================
 

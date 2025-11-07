@@ -24,7 +24,12 @@
       "Bash(git log:*)",
       "Bash(dir /s /b *.bak *.backup *.tmp 2)",
       "Bash(git config:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(npx tsc:*)",
+      "Bash(del /F \"D:\\Hennessy.Night\\HennessyNight\\data\\knowledgebase.db\")",
+      "Bash(cmd /c del /F \"D:\\Hennessy.Night\\HennessyNight\\data\\knowledgebase.db\")"
     ],
     "deny": [],
     "ask": []
