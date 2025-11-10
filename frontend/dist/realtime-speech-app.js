@@ -47,10 +47,15 @@ class RealtimeSpeechManager {
         this.audioStream = null;
         this.audioContext = null;
         this.mediaRecorder = null;
-        this.audioChunks = [];
+        this.audioChunks = []; // 累积的音频数据（持续录音）
+        this.currentSegmentChunks = []; // 当前断句的音频片段
         this.identificationQueue = []; // 识别队列
         this.isIdentifying = false; // 是否正在识别
-        this.segmentDuration = 5000; // 音频片段时长(5秒，更长的音频可提取更多特征)
+        this.serverSpeakers = []; // 从服务器加载的256维声纹数据
+        this.lastIdentifiedSpeaker = null; // 上一次识别到的说话人（用于变化检测）
+        this.consecutiveSameSpeaker = 0; // 连续识别到相同说话人的次数
+        this.lastSentenceTime = Date.now(); // 上次断句时间
+        this.identifiedSpeakers = new Map(); // 🎯 记录所有识别出的说话人 {name: {name, email, count}}
 
         this.initRecognition();
     }
@@ -121,7 +126,7 @@ class RealtimeSpeechManager {
             }
         }
 
-        // 立即发送临时结果（实现 <500ms）
+        // 显示临时识别结果
         if (interimText) {
             const cleanInterim = this.cleanText(interimText);
             if (cleanInterim) {
@@ -139,13 +144,20 @@ class RealtimeSpeechManager {
             const cleanFinal = this.cleanText(finalText);
             if (cleanFinal) {
                 this.transcriptBuffer += cleanFinal;
+                const messageTimestamp = Date.now();
+
+                // 🎯 立即显示文字（使用"识别中"状态）
                 this.eventBus.emit('transcription:final', {
                     text: cleanFinal,
-                    speaker: this.currentSpeaker,
-                    timestamp: Date.now(),
+                    speaker: { name: '识别中', confidence: 0, identifying: true },
+                    timestamp: messageTimestamp,
                     isFinal: true
                 });
-                this.lastFinalTime = Date.now();
+                this.lastFinalTime = messageTimestamp;
+
+                // 🎯 异步触发声纹识别（不阻塞显示）
+                console.log('📌 检测到断句，异步触发声纹识别');
+                this.captureAudioForIdentification(messageTimestamp);
             }
         }
     }
@@ -154,13 +166,37 @@ class RealtimeSpeechManager {
         return text.trim().replace(/\s+/g, ' ');
     }
 
+    /**
+     * 从服务器加载声纹数据
+     */
+    async loadServerSpeakers() {
+        try {
+            console.log('📡 从服务器加载声纹数据...');
+            const response = await fetch('/api/v1/speakers');
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            const result = await response.json();
+            this.serverSpeakers = result.data || [];
+            console.log(`✅ 加载了 ${this.serverSpeakers.length} 个服务器声纹 (256维WeSpeaker)`);
+            return this.serverSpeakers;
+        } catch (error) {
+            console.error('❌ 加载服务器声纹失败:', error);
+            this.serverSpeakers = [];
+            return [];
+        }
+    }
+
     async startRecording() {
         if (!this.recognition) {
             throw new Error('语音识别未初始化');
         }
 
         try {
-            // 获取音频流
+            // 1. 从服务器加载最新的声纹数据
+            await this.loadServerSpeakers();
+
+            // 2. 获取音频流
             this.audioStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     echoCancellation: true,
@@ -182,7 +218,7 @@ class RealtimeSpeechManager {
             this.recognition.start();
             this.eventBus.emit('recording:started');
 
-            console.log('🎤 开始实时识别（<500ms延迟 + 自动说话人识别）');
+            console.log('🎤 开始实时识别（<500ms延迟 + 服务器端WeSpeaker 256维声纹识别）');
         } catch (error) {
             console.error('启动录音失败:', error);
             alert('无法访问麦克风');
@@ -191,115 +227,263 @@ class RealtimeSpeechManager {
     }
 
     /**
-     * 启动音频捕获 (用于说话人识别)
+     * 启动音频捕获 (用于说话人识别) - 使用Web Audio API重采样到16kHz
      */
     startAudioCapture() {
         try {
-            console.log('🎙️ 准备启动音频捕获...');
+            console.log('🎙️ 准备启动音频捕获（Web Audio API + 16kHz重采样）...');
 
-            // 检查支持的 MIME 类型
+            // 🎯 方案1: 使用Web Audio API进行16kHz重采样
+            // 创建AudioContext，强制16kHz采样率
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 16000  // 强制16kHz采样率
+            });
+
+            console.log(`✅ AudioContext已创建 - 采样率: ${this.audioContext.sampleRate}Hz`);
+
+            // 从MediaStream创建音频源
+            const source = this.audioContext.createMediaStreamSource(this.audioStream);
+
+            // 创建ScriptProcessor用于捕获PCM数据
+            const bufferSize = 4096;
+            const processor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
+
+            // 用于累积音频样本
+            this.audioSamples = [];
+
+            processor.onaudioprocess = (e) => {
+                // 获取单声道PCM数据 (Float32Array)
+                const inputData = e.inputBuffer.getChannelData(0);
+
+                // 复制数据到累积数组
+                const samples = new Float32Array(inputData.length);
+                samples.set(inputData);
+                this.audioSamples.push(samples);
+
+                // 可选: 限制内存使用，保留最近30秒的音频
+                const maxSamples = 30 * this.audioContext.sampleRate; // 30秒
+                let totalSamples = this.audioSamples.reduce((sum, arr) => sum + arr.length, 0);
+                while (totalSamples > maxSamples && this.audioSamples.length > 0) {
+                    const removed = this.audioSamples.shift();
+                    totalSamples -= removed.length;
+                }
+            };
+
+            // 连接音频节点
+            source.connect(processor);
+            processor.connect(this.audioContext.destination);
+
+            // 保存processor引用以便后续停止
+            this.audioProcessor = processor;
+
+            console.log('✅ Web Audio API音频捕获已启动');
+            console.log(`   - 采样率: ${this.audioContext.sampleRate}Hz (16kHz)`);
+            console.log(`   - 声道: 单声道`);
+            console.log(`   - 缓冲区大小: ${bufferSize}`);
+            console.log(`   - 格式: PCM Float32 (将转换为WAV)`);
+
+        } catch (error) {
+            console.error('⚠️ Web Audio API音频捕获失败:', error);
+            console.warn('   回退到传统MediaRecorder方式...');
+            this.startAudioCaptureFallback();
+        }
+    }
+
+    /**
+     * 备用方案: 使用传统MediaRecorder
+     */
+    startAudioCaptureFallback() {
+        try {
+            console.log('🎙️ 使用MediaRecorder备用方案...');
+
             let mimeType = 'audio/webm';
             if (!MediaRecorder.isTypeSupported(mimeType)) {
-                console.warn('⚠️ audio/webm 不支持,尝试其他格式');
                 if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
                     mimeType = 'audio/webm;codecs=opus';
                 } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
                     mimeType = 'audio/ogg';
                 } else {
-                    mimeType = ''; // 使用默认格式
+                    mimeType = '';
                 }
             }
 
-            console.log('📝 使用 MIME 类型:', mimeType || '默认');
-
-            // 创建 MediaRecorder
             this.mediaRecorder = new MediaRecorder(this.audioStream,
                 mimeType ? { mimeType } : undefined
             );
 
-            this.audioChunks = [];
+            this.currentSegmentChunks = [];
 
-            // 监听数据可用事件
             this.mediaRecorder.ondataavailable = (event) => {
                 if (event.data.size > 0) {
-                    console.log(`📥 收到音频数据: ${event.data.size} 字节`);
-                    this.audioChunks.push(event.data);
+                    this.currentSegmentChunks.push(event.data);
                 }
             };
 
-            // 监听停止事件(每个片段录制完成)
-            this.mediaRecorder.onstop = () => {
-                console.log('⏹️ MediaRecorder 已停止,处理音频片段');
-                this.processAudioSegment();
-            };
-
-            // 监听错误事件
             this.mediaRecorder.onerror = (event) => {
                 console.error('❌ MediaRecorder 错误:', event.error);
             };
 
-            // 开始录制,每3秒一个片段
-            this.startNextSegment();
-
-            console.log('✅ 音频捕获已启动 (片段时长: 5秒)');
+            this.mediaRecorder.start(100);
+            console.log('✅ MediaRecorder已启动 (备用方案)');
 
         } catch (error) {
-            console.warn('⚠️ 音频捕获失败,说话人识别不可用:', error);
+            console.warn('⚠️ 备用方案也失败:', error);
         }
     }
 
     /**
-     * 开始录制下一个片段
+     * 当检测到断句时，抓取当前音频用于识别
      */
-    startNextSegment() {
-        if (!this.isRecording || !this.mediaRecorder) {
-            console.log('⏭️ 跳过片段录制 (isRecording:', this.isRecording, ', mediaRecorder:', !!this.mediaRecorder, ')');
-            return;
-        }
+    captureAudioForIdentification(messageTimestamp) {
+        // 🎯 如果使用Web Audio API (audioSamples存在)
+        if (this.audioSamples && this.audioSamples.length > 0) {
+            console.log(`📦 抓取Web Audio API音频 (${this.audioSamples.length} 个缓冲区)`);
 
-        this.audioChunks = []; // 清空之前的数据
-        console.log('▶️ 开始录制新片段 (5秒)');
-        this.mediaRecorder.start();
-
-        // 5秒后停止当前片段
-        setTimeout(() => {
-            if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
-                console.log('⏸️ 停止当前片段录制');
-                this.mediaRecorder.stop();
+            // 合并所有音频样本
+            const totalLength = this.audioSamples.reduce((sum, arr) => sum + arr.length, 0);
+            const mergedSamples = new Float32Array(totalLength);
+            let offset = 0;
+            for (const samples of this.audioSamples) {
+                mergedSamples.set(samples, offset);
+                offset += samples.length;
             }
-        }, this.segmentDuration);
+
+            console.log(`   - 总样本数: ${totalLength}`);
+            console.log(`   - 时长: ${(totalLength / this.audioContext.sampleRate).toFixed(2)}秒`);
+
+            // 转换为WAV格式
+            const wavBlob = this.pcmToWav(mergedSamples, this.audioContext.sampleRate);
+            console.log(`   - WAV大小: ${(wavBlob.size / 1024).toFixed(2)}KB`);
+
+            // 清空音频样本，为下一次断句做准备
+            this.audioSamples = [];
+
+            // 检测音频有效性并识别
+            this.processAudioForIdentification(wavBlob, messageTimestamp);
+        }
+        // 🎯 备用方案: 使用MediaRecorder
+        else if (this.mediaRecorder && this.currentSegmentChunks.length > 0) {
+            console.log(`📦 抓取MediaRecorder音频 (${this.currentSegmentChunks.length} 片段)`);
+
+            const audioBlob = new Blob([...this.currentSegmentChunks], { type: 'audio/webm' });
+            console.log(`   - WebM大小: ${(audioBlob.size / 1024).toFixed(2)}KB`);
+
+            // 清空当前片段
+            this.currentSegmentChunks = [];
+
+            // 检测音频有效性并识别
+            this.processAudioForIdentification(audioBlob, messageTimestamp);
+        }
+        else {
+            console.log('⏭️ 没有音频数据可用于识别');
+            return;
+        }
     }
 
     /**
-     * 处理音频片段 - 添加到识别队列
+     * 将PCM Float32数据转换为WAV格式
+     * @param {Float32Array} samples PCM样本数据
+     * @param {number} sampleRate 采样率
+     * @returns {Blob} WAV格式的Blob
      */
-    async processAudioSegment() {
-        console.log(`🔄 处理音频片段 (chunks: ${this.audioChunks.length})`);
+    pcmToWav(samples, sampleRate) {
+        const numChannels = 1;  // 单声道
+        const bitsPerSample = 16;  // 16位
+        const bytesPerSample = bitsPerSample / 8;
 
-        if (this.audioChunks.length === 0) {
-            console.warn('⚠️ 没有音频数据,跳过识别');
-            this.startNextSegment(); // 继续下一个片段
-            return;
+        // 转换Float32 [-1, 1] 到 Int16 [-32768, 32767]
+        const int16Samples = new Int16Array(samples.length);
+        for (let i = 0; i < samples.length; i++) {
+            const s = Math.max(-1, Math.min(1, samples[i]));
+            int16Samples[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
         }
 
-        // 合并音频片段
-        const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+        // 创建WAV文件头
+        const dataLength = int16Samples.length * bytesPerSample;
+        const buffer = new ArrayBuffer(44 + dataLength);
+        const view = new DataView(buffer);
 
-        console.log('📦 音频片段就绪:', (audioBlob.size / 1024).toFixed(2) + 'KB');
+        // RIFF标识符
+        this.writeString(view, 0, 'RIFF');
+        view.setUint32(4, 36 + dataLength, true);  // 文件大小
+        this.writeString(view, 8, 'WAVE');
+
+        // fmt 子块
+        this.writeString(view, 12, 'fmt ');
+        view.setUint32(16, 16, true);  // fmt块大小
+        view.setUint16(20, 1, true);  // PCM格式
+        view.setUint16(22, numChannels, true);  // 声道数
+        view.setUint32(24, sampleRate, true);  // 采样率
+        view.setUint32(28, sampleRate * numChannels * bytesPerSample, true);  // 字节率
+        view.setUint16(32, numChannels * bytesPerSample, true);  // 块对齐
+        view.setUint16(34, bitsPerSample, true);  // 位深度
+
+        // data 子块
+        this.writeString(view, 36, 'data');
+        view.setUint32(40, dataLength, true);
+
+        // 写入PCM数据
+        const dataView = new Int16Array(buffer, 44);
+        dataView.set(int16Samples);
+
+        return new Blob([buffer], { type: 'audio/wav' });
+    }
+
+    /**
+     * 辅助函数: 写入字符串到DataView
+     */
+    writeString(view, offset, string) {
+        for (let i = 0; i < string.length; i++) {
+            view.setUint8(offset + i, string.charCodeAt(i));
+        }
+    }
+
+    /**
+     * 检测音频是否有效（非静音）
+     * 使用简单的文件大小检测，避免复杂的音频解码
+     */
+    async isAudioValid(audioBlob) {
+        // 基于文件大小的简单检测
+        // 断句的音频如果小于5KB，很可能是静音或噪音
+        const minSize = 5 * 1024; // 5KB
+
+        if (audioBlob.size < minSize) {
+            console.log(`🔇 音频太小 (${(audioBlob.size / 1024).toFixed(2)}KB < ${(minSize / 1024)}KB)，判定为静音`);
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * 处理音频用于识别 - 添加到识别队列
+     */
+    async processAudioForIdentification(audioBlob, messageTimestamp) {
+        console.log(`🔄 处理音频用于识别: ${(audioBlob.size / 1024).toFixed(2)}KB [消息ID:${messageTimestamp}]`);
+
+        // 🎯 检测音频有效性（过滤静音）
+        const isValid = await this.isAudioValid(audioBlob);
+        if (!isValid) {
+            console.log('⏭️ 跳过静音，不加入识别队列');
+            // 静音时也要更新UI为"未识别"
+            this.eventBus.emit('speaker:identified', {
+                messageId: messageTimestamp,
+                speaker: { name: '未识别', confidence: 0, identifying: false }
+            });
+            return;
+        }
 
         // 添加到识别队列
         this.identificationQueue.push({
             blob: audioBlob,
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            messageId: messageTimestamp // 🎯 记录对应的消息ID
         });
 
         console.log(`📥 加入识别队列 (队列长度: ${this.identificationQueue.length})`);
 
         // 触发识别处理
         this.processIdentificationQueue();
-
-        // 继续录制下一个片段
-        this.startNextSegment();
     }
 
     /**
@@ -323,106 +507,150 @@ class RealtimeSpeechManager {
         const task = this.identificationQueue.shift();
 
         try {
-            console.log('🔍 开始识别说话人...');
+            console.log(`🔍 开始识别说话人 [消息ID:${task.messageId}] (使用服务器端WeSpeaker 256维)...`);
 
-            // 转换为File对象
-            const audioFile = new File([task.blob], 'segment.webm', { type: 'audio/webm' });
-
-            // 🎯 使用 MFCC 高精度提取器
-            let extractor;
-            if (typeof MFCCVoiceprintExtractor !== 'undefined') {
-                extractor = new MFCCVoiceprintExtractor();
-                console.log('✅ 使用 MFCC 高精度提取器进行识别');
-            } else if (typeof VoiceprintExtractor !== 'undefined') {
-                extractor = new VoiceprintExtractor();
-                console.warn('⚠️ MFCC 未加载，使用快速提取器');
-            } else {
-                throw new Error('没有可用的声纹提取器');
-            }
-
-            const voiceprintData = await extractor.extractFromFile(audioFile);
-
-            console.log('✅ 特征提取完成:', voiceprintData.vector.length, '维');
-
-            // 匹配说话人
-            const matcher = window.voiceprintMatcher || new VoiceprintMatcher();
-            const speakers = window.voiceprintManager?.speakers || [];
-
-            // 🎯 只在没有手动选择时才自动应用声纹识别结果
-            const isManuallySelected = this.currentSpeaker.manual === true;
-
-            if (speakers.length === 0) {
+            // 检查是否有注册的声纹
+            if (this.serverSpeakers.length === 0) {
                 console.log('ℹ️ 没有注册声纹,跳过识别');
-                if (!isManuallySelected) {
-                    this.currentSpeaker = { name: '未知说话人', confidence: 0, identifying: false };
-                }
+                this.eventBus.emit('speaker:identified', {
+                    messageId: task.messageId,
+                    speaker: { name: '未识别', confidence: 0, identifying: false }
+                });
             } else {
-                const match = matcher.matchSpeaker(voiceprintData.vector, speakers);
+                // 转换为File对象 - 根据实际类型命名
+                const fileName = task.blob.type === 'audio/wav' ? 'segment.wav' : 'segment.webm';
+                const audioFile = new File([task.blob], fileName, { type: task.blob.type });
 
-                if (match) {
-                    console.log(`✅ 声纹识别建议: ${match.speaker.name} (${(match.similarity * 100).toFixed(1)}%)`);
+                // 🎯 使用服务器端WeSpeaker进行识别
+                try {
+                    const formData = new FormData();
+                    formData.append('audioFile', audioFile);
 
-                    // 只在没有手动选择时才自动应用
-                    if (!isManuallySelected) {
-                        this.currentSpeaker = {
-                            name: match.speaker.name,
-                            confidence: match.similarity,
-                            identifying: false,
-                            matched: true
-                        };
-                        console.log('⚡ 自动应用声纹识别结果');
+                    // 将服务器声纹数据发送给API进行识别
+                    const speakersToMatch = this.serverSpeakers.map(s => ({
+                        id: s.id,
+                        name: s.name,
+                        voiceprint: s.voiceprintData?.features || []
+                    }));
+
+                    console.log('='.repeat(80));
+                    console.log(`📤 [前端] 发送识别请求`);
+                    console.log(`   - 音频大小: ${(task.blob.size / 1024).toFixed(2)}KB`);
+                    console.log(`   - 音频格式: ${task.blob.type}`);
+                    console.log(`   - 待匹配声纹数: ${speakersToMatch.length}`);
+                    console.log(`   - 待匹配声纹列表:`);
+                    speakersToMatch.forEach((s, idx) => {
+                        console.log(`     ${idx + 1}. ${s.name} (ID:${s.id}) - 特征向量维度:${s.voiceprint.length}`);
+                    });
+                    console.log('='.repeat(80));
+
+                    formData.append('speakers', JSON.stringify(speakersToMatch));
+
+                    const requestStartTime = Date.now();
+                    console.log(`📡 [前端] 正在发送请求到 /api/v1/audio/identify-speaker...`);
+                    const response = await fetch('/api/v1/audio/identify-speaker', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const requestDuration = Date.now() - requestStartTime;
+                    console.log(`📡 [前端] 收到响应 - 状态码:${response.status} 耗时:${requestDuration}ms`);
+
+                    if (!response.ok) {
+                        console.error(`❌ [前端] 服务器返回错误状态码: ${response.status}`);
+                        throw new Error(`服务器错误: ${response.status}`);
+                    }
+
+                    const result = await response.json();
+                    console.log('='.repeat(80));
+                    console.log(`✅ [前端] 服务器识别完成 (耗时: ${requestDuration}ms)`);
+                    console.log(`   - 识别结果:`, result);
+
+                    if (result.data && result.data.matched) {
+                        const match = result.data;
+                        console.log(`✅ [前端] 声纹匹配成功`);
+                        console.log(`   - 匹配到的说话人: ${match.speaker.name}`);
+                        console.log(`   - 相似度: ${(match.similarity * 100).toFixed(2)}%`);
+                        if (match.allScores) {
+                            console.log(`   - 所有候选人得分:`);
+                            match.allScores.forEach((score, idx) => {
+                                console.log(`     ${idx + 1}. ${score.name}: ${(score.similarity * 100).toFixed(2)}%`);
+                            });
+                        }
+
+                        // 🎯 说话人变化检测
+                        const speakerChanged = this.lastIdentifiedSpeaker !== match.speaker.name;
+                        if (speakerChanged) {
+                            console.log(`🔄 [前端] 检测到说话人变化: ${this.lastIdentifiedSpeaker || '初始'} -> ${match.speaker.name}`);
+                            this.lastIdentifiedSpeaker = match.speaker.name;
+                            this.consecutiveSameSpeaker = 1;
+                        } else {
+                            this.consecutiveSameSpeaker++;
+                            console.log(`✔️ [前端] 说话人未变化: ${match.speaker.name} (连续${this.consecutiveSameSpeaker}次)`);
+                        }
+                        console.log('='.repeat(80));
+
+                        // 🎯 记录识别出的说话人
+                        if (!this.identifiedSpeakers.has(match.speaker.name)) {
+                            // 从serverSpeakers中找到完整信息
+                            const speakerInfo = this.serverSpeakers.find(s => s.name === match.speaker.name);
+                            this.identifiedSpeakers.set(match.speaker.name, {
+                                name: match.speaker.name,
+                                email: speakerInfo?.email || '',
+                                id: speakerInfo?.id || '',
+                                count: 1
+                            });
+                        } else {
+                            const info = this.identifiedSpeakers.get(match.speaker.name);
+                            info.count++;
+                        }
+
+                        // 🎯 发送识别结果事件，带上messageId
+                        this.eventBus.emit('speaker:identified', {
+                            messageId: task.messageId,
+                            speaker: {
+                                name: match.speaker.name,
+                                confidence: match.similarity,
+                                identifying: false,
+                                matched: true
+                            }
+                        });
                     } else {
-                        console.log('ℹ️ 用户已手动选择说话人，声纹识别仅作参考');
-                    }
-                } else {
-                    console.log('❌ 未识别到匹配的说话人');
-                    if (!isManuallySelected) {
-                        this.currentSpeaker = {
-                            name: '未知说话人',
-                            confidence: 0,
-                            identifying: false,
-                            matched: false
-                        };
-                    }
-                }
-            }
+                        console.log('='.repeat(80));
+                        console.log('❌ [前端] 未匹配到说话人');
+                        if (result.data && result.data.allScores) {
+                            console.log(`   - 所有候选人得分:`);
+                            result.data.allScores.forEach((score, idx) => {
+                                console.log(`     ${idx + 1}. ${score.name}: ${(score.similarity * 100).toFixed(2)}%`);
+                            });
+                            console.log(`   - 最高相似度: ${(result.data.bestSimilarity * 100).toFixed(2)}%`);
+                            console.log(`   - 识别阈值: 40%`);
+                            console.log(`   - 未达到阈值，判定为未识别`);
+                        }
+                        console.log('='.repeat(80));
 
-            // 通知UI更新（只在自动识别时）
-            if (!isManuallySelected) {
-                this.eventBus.emit('speaker:identified', this.currentSpeaker);
+                        // 🎯 发送未识别结果
+                        this.eventBus.emit('speaker:identified', {
+                            messageId: task.messageId,
+                            speaker: {
+                                name: '未识别',
+                                confidence: 0,
+                                identifying: false,
+                                matched: false
+                            }
+                        });
+                    }
+                } catch (serverError) {
+                    console.error('❌ 服务器识别失败:', serverError);
+                    this.eventBus.emit('speaker:identified', {
+                        messageId: task.messageId,
+                        speaker: { name: '未识别', confidence: 0, identifying: false }
+                    });
+                }
             }
 
         } catch (error) {
             console.error('❌ 说话人识别失败:', error);
-
-            // 如果MFCC失败，尝试降级到快速提取器
-            if (error.message && error.message.includes('decode') && typeof VoiceprintExtractor !== 'undefined') {
-                try {
-                    console.log('⚠️ 尝试使用快速提取器作为降级方案...');
-                    const fallbackExtractor = new VoiceprintExtractor();
-                    const voiceprintData = await fallbackExtractor.extractFromFile(audioFile);
-
-                    const matcher = window.voiceprintMatcher || new VoiceprintMatcher();
-                    const speakers = window.voiceprintManager?.speakers || [];
-                    const match = matcher.matchSpeaker(voiceprintData.vector, speakers);
-
-                    if (match) {
-                        console.log(`✅ 降级识别成功: ${match.speaker.name}`);
-                        this.currentSpeaker = {
-                            name: match.speaker.name,
-                            confidence: match.similarity * 0.8, // 降级降低置信度
-                            identifying: false,
-                            matched: true
-                        };
-                        this.eventBus.emit('speaker:identified', this.currentSpeaker);
-                    }
-                } catch (fallbackError) {
-                    console.error('❌ 降级识别也失败:', fallbackError);
-                    this.currentSpeaker = { name: '识别失败', confidence: 0, identifying: false };
-                }
-            } else {
-                this.currentSpeaker = { name: '识别失败', confidence: 0, identifying: false };
-            }
+            this.currentSpeaker = { name: '识别失败', confidence: 0, identifying: false };
         } finally {
             this.isIdentifying = false;
 
@@ -436,33 +664,100 @@ class RealtimeSpeechManager {
         }
     }
 
-    stopRecording() {
+    async stopRecording() {
         if (this.recognition && this.isRecording) {
             this.isRecording = false;
             this.recognition.stop();
 
-            // 停止音频捕获
+            // 🎯 停止Web Audio API音频捕获
+            if (this.audioProcessor) {
+                this.audioProcessor.disconnect();
+                this.audioProcessor = null;
+                console.log('✅ AudioProcessor已停止');
+            }
+            if (this.audioContext) {
+                await this.audioContext.close();
+                this.audioContext = null;
+                console.log('✅ AudioContext已关闭');
+            }
+
+            // 停止MediaRecorder (备用方案)
             if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
                 this.mediaRecorder.stop();
             }
+
+            // 停止音频流
             if (this.audioStream) {
                 this.audioStream.getTracks().forEach(track => track.stop());
                 this.audioStream = null;
             }
 
-            // 清空识别队列
-            this.identificationQueue = [];
-            this.isIdentifying = false;
+            console.log('⏹️ 停止录音');
+            console.log('🎯 识别队列将继续处理，不会停止');
 
+            // 🎯 发送停止事件
             this.eventBus.emit('recording:stopped', {
                 transcript: this.transcriptBuffer.trim()
             });
-            console.log('⏹️ 停止录音');
+
+            // 🎯 启动后台监控，当识别完成后自动启用会议纪要按钮
+            this.startIdentificationMonitor();
         }
     }
 
     getFullTranscript() {
         return this.transcriptBuffer.trim();
+    }
+
+    /**
+     * 🎯 获取识别出的说话人列表
+     */
+    getIdentifiedSpeakers() {
+        return Array.from(this.identifiedSpeakers.values());
+    }
+
+    /**
+     * 🎯 检查是否还有待识别的任务
+     */
+    hasIdentificationPending() {
+        return this.identificationQueue.length > 0 || this.isIdentifying;
+    }
+
+    /**
+     * 🎯 启动后台监控，监听识别队列完成
+     */
+    startIdentificationMonitor() {
+        if (this.identificationMonitor) {
+            return; // 已经在监控中
+        }
+
+        const pendingCount = this.identificationQueue.length + (this.isIdentifying ? 1 : 0);
+        if (pendingCount === 0) {
+            // 没有待处理任务，直接启用按钮
+            this.eventBus.emit('identification:completed');
+            return;
+        }
+
+        console.log(`🔍 启动识别监控 - 当前队列: ${pendingCount} 个任务`);
+
+        let lastReportTime = Date.now();
+        this.identificationMonitor = setInterval(() => {
+            const remaining = this.identificationQueue.length + (this.isIdentifying ? 1 : 0);
+
+            // 每5秒报告一次进度
+            if (Date.now() - lastReportTime > 5000 && remaining > 0) {
+                console.log(`🔍 识别进度: 还有 ${remaining} 个任务...`);
+                lastReportTime = Date.now();
+            }
+
+            // 检查是否完成
+            if (remaining === 0) {
+                clearInterval(this.identificationMonitor);
+                this.identificationMonitor = null;
+                console.log('✅ 所有识别任务已完成');
+                this.eventBus.emit('identification:completed');
+            }
+        }, 1000); // 每秒检查一次
     }
 }
 
@@ -529,11 +824,19 @@ class UIManager {
             this.clearTranscriptDisplay();
         });
 
-        this.eventBus.on('recording:stopped', () => {
+        this.eventBus.on('recording:stopped', (data) => {
             document.getElementById('startRecording').disabled = false;
             document.getElementById('stopRecording').disabled = true;
+            // 🎯 停止录音后先禁用按钮，等待识别完成
+            document.getElementById('generateSummary').disabled = true;
+            this.setStatus('等待声纹识别完成...', 'idle');
+        });
+
+        // 🎯 监听识别完成事件
+        this.eventBus.on('identification:completed', () => {
             document.getElementById('generateSummary').disabled = false;
-            this.setStatus('录音已停止', 'idle');
+            this.setStatus('录音已停止，可生成会议纪要', 'idle');
+            console.log('✅ UI已更新: 会议纪要按钮已启用');
         });
 
         // 临时结果 - 实时更新
@@ -547,8 +850,9 @@ class UIManager {
         });
 
         // 说话人识别完成 - 更新头像和名称
-        this.eventBus.on('speaker:identified', (speakerData) => {
-            this.updateSpeakerIdentification(speakerData);
+        this.eventBus.on('speaker:identified', (data) => {
+            console.log('📢 UI收到识别完成事件:', data);
+            this.updateSpeakerIdentification(data);
         });
     }
 
@@ -577,6 +881,13 @@ class UIManager {
 
     updateInterimText(data) {
         const { text, speaker, timestamp } = data;
+
+        // 更新顶部临时文字显示区域
+        const interimTextDisplay = document.getElementById('interimText');
+        if (interimTextDisplay) {
+            interimTextDisplay.textContent = text || '等待语音输入...';
+        }
+
         const container = document.getElementById('transcriptDisplay');
         if (!container) return;
 
@@ -606,6 +917,13 @@ class UIManager {
 
     addFinalText(data) {
         const { text, speaker, timestamp } = data;
+
+        // 清空顶部临时文字显示区域
+        const interimTextDisplay = document.getElementById('interimText');
+        if (interimTextDisplay) {
+            interimTextDisplay.textContent = '等待语音输入...';
+        }
+
         const container = document.getElementById('transcriptDisplay');
         if (!container) return;
 
@@ -645,6 +963,7 @@ class UIManager {
 
         const messageDiv = document.createElement('div');
         messageDiv.className = 'speaker-message';
+        messageDiv.dataset.messageId = timestamp; // 🎯 添加消息ID用于后续更新
 
         // 如果说话人正在识别中，显示特殊状态
         const isIdentifying = speaker.identifying === true;
@@ -666,6 +985,26 @@ class UIManager {
         this.currentMessageElement = messageDiv;
         this.lastSpeaker = speaker;
 
+        console.log(`📝 创建新消息块 [ID:${timestamp}] - 说话人: ${speakerName}`);
+
+        // 🎯 如果是"识别中"状态,设置30秒超时自动更新为"未识别"
+        if (isIdentifying) {
+            console.log(`⏱️ 设置识别超时检测 [ID:${timestamp}] - 30秒超时`);
+            setTimeout(() => {
+                const elem = container.querySelector(`[data-message-id="${timestamp}"]`);
+                if (elem) {
+                    const avatar = elem.querySelector('.speaker-avatar');
+                    if (avatar && avatar.classList.contains('identifying')) {
+                        console.warn(`⏱️ 识别超时 [ID:${timestamp}],更新为"未识别"`);
+                        this.updateSpeakerIdentification({
+                            messageId: timestamp,
+                            speaker: { name: '未识别', confidence: 0, identifying: false }
+                        });
+                    }
+                }
+            }, 30000); // 30秒超时
+        }
+
         // 动画
         requestAnimationFrame(() => {
             messageDiv.style.opacity = '1';
@@ -673,35 +1012,46 @@ class UIManager {
         });
     }
 
-    updateSpeakerIdentification(speakerData) {
-        // 更新当前消息块的说话人信息
-        if (!this.currentMessageElement) return;
+    updateSpeakerIdentification(data) {
+        const { messageId, speaker } = data;
 
-        const avatarDiv = this.currentMessageElement.querySelector('.speaker-avatar');
-        const nameSpan = this.currentMessageElement.querySelector('.speaker-name');
-        const spinner = this.currentMessageElement.querySelector('.identifying-spinner');
+        console.log(`🔍 尝试更新消息 [ID:${messageId}] 的说话人为: ${speaker.name}`);
+
+        // 🎯 通过messageId定位消息块
+        const container = document.getElementById('transcriptDisplay');
+        if (!container) return;
+
+        const messageElement = container.querySelector(`[data-message-id="${messageId}"]`);
+        if (!messageElement) {
+            console.warn(`⚠️ 未找到消息块 [ID:${messageId}]`);
+            return;
+        }
+
+        const avatarDiv = messageElement.querySelector('.speaker-avatar');
+        const nameSpan = messageElement.querySelector('.speaker-name');
+        const spinner = messageElement.querySelector('.identifying-spinner');
 
         if (avatarDiv && nameSpan) {
             // 移除识别中状态
             avatarDiv.classList.remove('identifying');
 
             // 更新头像
-            avatarDiv.textContent = speakerData.name.charAt(0);
+            avatarDiv.textContent = speaker.name.charAt(0);
 
             // 更新名称并添加置信度显示
-            if (speakerData.matched && speakerData.confidence) {
-                const confidencePercent = (speakerData.confidence * 100).toFixed(1);
+            if (speaker.matched && speaker.confidence) {
+                const confidencePercent = (speaker.confidence * 100).toFixed(1);
                 let confidenceColor = '#06ffa5'; // 默认绿色
-                if (speakerData.confidence < 0.80) {
+                if (speaker.confidence < 0.80) {
                     confidenceColor = '#ff9500'; // 橙色
-                } else if (speakerData.confidence < 0.90) {
+                } else if (speaker.confidence < 0.90) {
                     confidenceColor = '#ffeb3b'; // 黄色
                 }
 
-                nameSpan.innerHTML = `${speakerData.name} <span style="font-size: 0.75em; color: ${confidenceColor}; font-weight: 600;">(${confidencePercent}%)</span>`;
+                nameSpan.innerHTML = `${speaker.name} <span style="font-size: 0.75em; color: ${confidenceColor}; font-weight: 600;">(${confidencePercent}%)</span>`;
                 nameSpan.title = `匹配置信度: ${confidencePercent}%`;
             } else {
-                nameSpan.textContent = speakerData.name;
+                nameSpan.textContent = speaker.name;
             }
 
             // 移除加载动画
@@ -709,7 +1059,7 @@ class UIManager {
                 spinner.remove();
             }
 
-            console.log(`✅ UI已更新: ${speakerData.name}`);
+            console.log(`✅ UI已更新 [ID:${messageId}]: ${speaker.name}`);
         }
     }
 
@@ -731,6 +1081,31 @@ class UIManager {
         return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
     }
 
+    /**
+     * 🎯 从实时转录区域获取带说话人的完整内容
+     */
+    getTranscriptWithSpeakers() {
+        const container = document.getElementById('transcriptDisplay');
+        if (!container) return null;
+
+        const messages = container.querySelectorAll('.speaker-message');
+        const transcript = [];
+
+        messages.forEach(msg => {
+            const speakerName = msg.querySelector('.speaker-name')?.textContent || '未知';
+            const content = msg.querySelector('.message-content')?.textContent || '';
+
+            if (content.trim()) {
+                transcript.push({
+                    speaker: speakerName,
+                    content: content.trim()
+                });
+            }
+        });
+
+        return transcript;
+    }
+
     async startRecording() {
         try {
             await this.speechManager.startRecording();
@@ -743,16 +1118,60 @@ class UIManager {
         this.speechManager.stopRecording();
     }
 
-    generateSummary() {
-        const transcript = this.speechManager.getFullTranscript();
-        if (!transcript) {
+    async generateSummary() {
+        console.log('='.repeat(80));
+        console.log('📋 生成会议纪要...');
+
+        // 🎯 检查是否还有待识别的任务（理论上不应该有，因为按钮只在识别完成后才启用）
+        const hasPending = this.speechManager.hasIdentificationPending();
+        if (hasPending) {
+            alert('请等待声纹识别完成后再生成会议纪要');
+            return;
+        }
+
+        // 🎯 从实时转录区域获取带说话人的内容
+        const transcriptWithSpeakers = this.getTranscriptWithSpeakers();
+        if (!transcriptWithSpeakers || transcriptWithSpeakers.length === 0) {
             alert('没有转录内容');
             return;
+        }
+
+        console.log(`  - 转录消息数: ${transcriptWithSpeakers.length} 条`);
+        console.log(`  - 转录内容预览:`, transcriptWithSpeakers.slice(0, 3));
+
+        // 🎯 获取识别出的说话人
+        const identifiedSpeakers = this.speechManager.getIdentifiedSpeakers();
+        console.log('='.repeat(80));
+        console.log('📊 识别出的说话人:');
+        if (identifiedSpeakers.length > 0) {
+            identifiedSpeakers.forEach((sp, idx) => {
+                console.log(`  ${idx + 1}. ${sp.name} - 邮箱:${sp.email || '无'} - 发言:${sp.count}次`);
+            });
+        } else {
+            console.log('  (无)');
+        }
+        console.log('='.repeat(80));
+
+        // 生成参会人员HTML
+        let participantsHtml = '';
+        if (identifiedSpeakers.length > 0) {
+            participantsHtml = identifiedSpeakers.map(speaker => {
+                const emailPart = speaker.email ? ` (${speaker.email})` : '';
+                return `<li>${speaker.name}${emailPart} - 发言 ${speaker.count} 次</li>`;
+            }).join('');
+        } else {
+            participantsHtml = '<li>未识别到说话人</li>';
         }
 
         const summaryDisplay = document.getElementById('summaryDisplay');
         if (summaryDisplay) {
             summaryDisplay.innerHTML = `
+                <div class="summary-section">
+                    <div class="summary-title"><i class="fas fa-users"></i> 参会人员</div>
+                    <div class="summary-content">
+                        <ul>${participantsHtml}</ul>
+                    </div>
+                </div>
                 <div class="summary-section">
                     <div class="summary-title"><i class="fas fa-file-alt"></i> 会议转录</div>
                     <div class="summary-content">${transcript}</div>
@@ -761,6 +1180,7 @@ class UIManager {
                     <div class="summary-title"><i class="fas fa-chart-bar"></i> 统计信息</div>
                     <div class="summary-content">
                         <p>总字数: ${transcript.length} 字</p>
+                        <p>参会人数: ${identifiedSpeakers.length} 人</p>
                         <p>识别延迟: &lt;500ms</p>
                     </div>
                 </div>
@@ -771,6 +1191,31 @@ class UIManager {
             document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
             document.querySelector('[data-tab="summary"]')?.classList.add('active');
             document.getElementById('summary-tab')?.classList.add('active');
+        }
+
+        // 🎯 将会议纪要和参会人员信息传递给邮件应用
+        if (window.emailManager) {
+            console.log('📧 传递会议纪要给邮件应用');
+            window.emailManager.currentSummary = {
+                title: '会议纪要',
+                content: transcript,
+                transcript: transcript,
+                meetingDate: new Date().toLocaleDateString('zh-CN'),
+                attendees: identifiedSpeakers.map(s => ({
+                    name: s.name,
+                    email: s.email || null
+                })),
+                metadata: {
+                    title: '实时语音识别会议',
+                    attendees: identifiedSpeakers.map(s => s.name),
+                    wordCount: transcript.length,
+                    speakerCount: identifiedSpeakers.length
+                }
+            };
+            // 触发更新
+            window.emailManager.updateEmailContent();
+        } else {
+            console.warn('⚠️ 邮件管理器未找到');
         }
     }
 }
@@ -959,14 +1404,36 @@ class VoiceprintManager {
         }
     }
 
-    loadSpeakers() {
-        const saved = localStorage.getItem('speakers');
-        if (saved) {
-            try {
-                this.speakers = JSON.parse(saved);
-                this.updateSpeakerList();
-            } catch (e) {
-                console.error('加载声纹数据失败:', e);
+    async loadSpeakers() {
+        try {
+            console.log('📡 从服务器加载声纹列表...');
+            const response = await fetch('/api/v1/speakers');
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            const result = await response.json();
+            this.speakers = result.data || [];
+            console.log(`✅ 从服务器加载了 ${this.speakers.length} 个声纹`);
+            console.log('📋 声纹列表:', this.speakers.map(s => `${s.name} (${s.email || '无邮箱'})`).join(', '));
+
+            // 同步到 localStorage
+            this.saveSpeakers();
+
+            // 更新UI
+            this.updateSpeakerList();
+        } catch (error) {
+            console.error('❌ 从服务器加载声纹失败:', error);
+
+            // 降级到 localStorage
+            const saved = localStorage.getItem('speakers');
+            if (saved) {
+                try {
+                    this.speakers = JSON.parse(saved);
+                    console.log('⚠️ 使用本地缓存的声纹数据');
+                    this.updateSpeakerList();
+                } catch (e) {
+                    console.error('加载声纹数据失败:', e);
+                }
             }
         }
     }
@@ -976,7 +1443,7 @@ class VoiceprintManager {
     }
 
     async saveSpeaker() {
-        console.log('💾 保存声纹...');
+        console.log('💾 保存声纹 (使用WeSpeaker 256维)...');
 
         const nameInput = document.getElementById('speakerName');
         const emailInput = document.getElementById('speakerEmail');
@@ -1013,61 +1480,53 @@ class VoiceprintManager {
         // 显示处理进度
         const progressMsg = document.createElement('div');
         progressMsg.style.cssText = 'position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.2); z-index: 10000; text-align: center;';
-        progressMsg.innerHTML = '<h3 style="margin: 0 0 15px 0;">🎤 正在提取声纹特征...</h3><p style="color: #666;">这可能需要几秒钟</p>';
+        progressMsg.innerHTML = '<h3 style="margin: 0 0 15px 0;">🎤 正在上传音频到服务器...</h3><p style="color: #666;">使用WeSpeaker提取256维特征</p>';
         document.body.appendChild(progressMsg);
 
         try {
-            // 🎯 关键: 使用真正的特征提取
-            console.log('🔬 开始提取特征向量...');
-            const voiceprintData = await this.extractor.extractFromFile(audioFile);
+            // ✅ 新方案: 直接上传音频文件到服务器，让服务器端使用WeSpeaker提取256维特征
+            console.log('📤 上传音频到服务器进行WeSpeaker特征提取...');
 
-            console.log('✅ 特征提取成功!');
-            console.log('📊 特征向量维度:', voiceprintData.vector.length);
-            console.log('⏱️ 音频时长:', voiceprintData.duration.toFixed(2) + 's');
+            const formData = new FormData();
+            formData.append('name', name);
+            formData.append('email', email || '');
+            formData.append('voiceFile', audioFile);
 
-            // 🎯 多样本注册: 检查是否已存在同名说话人
-            let existingSpeaker = this.speakers.find(s => s.name.toLowerCase() === name.toLowerCase());
+            const response = await fetch('/api/v1/speakers', {
+                method: 'POST',
+                body: formData
+            });
 
-            if (existingSpeaker) {
-                // 如果已存在，添加到 voiceprints 数组
-                if (!existingSpeaker.voiceprints) {
-                    // 兼容旧数据: 将单个 voiceprint 转换为 voiceprints 数组
-                    existingSpeaker.voiceprints = [existingSpeaker.voiceprint];
-                    delete existingSpeaker.voiceprint;
-                }
-
-                // 添加新样本
-                existingSpeaker.voiceprints.push({
-                    vector: voiceprintData.vector,
-                    duration: voiceprintData.duration,
-                    sampleRate: voiceprintData.sampleRate,
-                    extractedAt: voiceprintData.extractedAt,
-                    metadata: voiceprintData.metadata
-                });
-
-                console.log(`✅ 为 ${name} 添加第 ${existingSpeaker.voiceprints.length} 个样本`);
-                alert(`✅ 已为 "${name}" 添加新样本!\n当前样本数: ${existingSpeaker.voiceprints.length}\n特征维度：${voiceprintData.vector.length}维\n音频时长：${voiceprintData.duration.toFixed(2)}秒`);
-            } else {
-                // 创建新说话人(使用 voiceprints 数组)
-                const speaker = {
-                    id: Date.now().toString(),
-                    name: name,
-                    email: email || '',
-                    voiceprints: [{
-                        vector: voiceprintData.vector,
-                        duration: voiceprintData.duration,
-                        sampleRate: voiceprintData.sampleRate,
-                        extractedAt: voiceprintData.extractedAt,
-                        metadata: voiceprintData.metadata
-                    }],
-                    audioUrl: null,
-                    createdAt: new Date().toISOString()
-                };
-
-                this.speakers.push(speaker);
-                console.log(`✅ 创建新说话人: ${name}`);
-                alert(`✅ 声纹已保存：${name}\n特征维度：${voiceprintData.vector.length}维\n音频时长：${voiceprintData.duration.toFixed(2)}秒`);
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `服务器错误: ${response.status}`);
             }
+
+            const result = await response.json();
+            console.log('✅ 服务器响应:', result);
+
+            // 从服务器响应中获取说话人信息
+            const serverSpeaker = result.data;
+
+            // 更新本地speakers列表
+            const existingIndex = this.speakers.findIndex(s => s.id === serverSpeaker.id);
+            if (existingIndex >= 0) {
+                this.speakers[existingIndex] = serverSpeaker;
+            } else {
+                this.speakers.push(serverSpeaker);
+            }
+
+            console.log('✅ 声纹注册成功!');
+            console.log('📊 特征维度:', serverSpeaker.voiceprintData?.featureDim || 'N/A');
+            console.log('🎯 模型:', serverSpeaker.voiceprintData?.model || 'N/A');
+            console.log('📈 样本数:', serverSpeaker.sampleCount || 1);
+            console.log('⏱️ 总时长:', serverSpeaker.totalDuration || 0, '秒');
+
+            const sampleCount = serverSpeaker.sampleCount || 1;
+            const totalDuration = serverSpeaker.totalDuration || 0;
+            const featureDim = serverSpeaker.voiceprintData?.featureDim || 256;
+
+            alert(`✅ ${result.message}\n\n样本数：${sampleCount}个\n向量：${featureDim}维 | 总时长${totalDuration.toFixed(1)}s\n模型：${serverSpeaker.voiceprintData?.model || 'wespeaker-chinese'}`);
 
             // 保存并更新
             this.saveSpeakers();
@@ -1080,7 +1539,9 @@ class VoiceprintManager {
 
             // 清理录音数据
             window.voiceprintAudioBlob = null;
-            reRecordVoiceprint();
+            if (typeof reRecordVoiceprint === 'function') {
+                reRecordVoiceprint();
+            }
 
             // 关闭弹窗
             this.closeModal('addSpeakerModal');
@@ -1088,15 +1549,15 @@ class VoiceprintManager {
             // 移除进度提示
             document.body.removeChild(progressMsg);
 
-            console.log('✅ 声纹保存成功');
+            console.log('✅ 声纹保存流程完成');
 
             // 触发事件
-            this.eventBus.emit('voiceprint:added', existingSpeaker || this.speakers[this.speakers.length - 1]);
+            this.eventBus.emit('voiceprint:added', serverSpeaker);
 
         } catch (error) {
-            console.error('❌ 声纹提取失败:', error);
+            console.error('❌ 声纹注册失败:', error);
             document.body.removeChild(progressMsg);
-            alert('❌ 声纹提取失败: ' + error.message + '\n\n请确保上传的是有效的音频文件(MP3/WAV/M4A等)');
+            alert('❌ 声纹注册失败: ' + error.message + '\n\n请确保上传的是有效的音频文件(WAV/MP3/M4A等)');
         }
     }
 
@@ -1119,13 +1580,36 @@ class VoiceprintManager {
         return hash.toString(36);
     }
 
-    deleteSpeaker(id) {
+    async deleteSpeaker(id) {
         if (!confirm('确定要删除这个声纹吗？')) return;
 
-        this.speakers = this.speakers.filter(s => s.id !== id);
-        this.saveSpeakers();
-        this.updateSpeakerList();
-        console.log('🗑️ 声纹已删除');
+        console.log('🗑️ 开始删除声纹:', id);
+
+        try {
+            // 调用后端API删除
+            const response = await fetch(`${API_BASE_URL}/speakers/${id}`, {
+                method: 'DELETE'
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error?.message || '删除失败');
+            }
+
+            console.log('✅ 后端删除成功');
+
+            // 从前端数组中删除
+            this.speakers = this.speakers.filter(s => s.id !== id);
+            this.saveSpeakers();
+            this.updateSpeakerList();
+            console.log('✅ 前端列表已更新');
+
+            // 重新加载声纹列表以确保同步
+            await this.loadSpeakers();
+        } catch (error) {
+            console.error('❌ 删除声纹失败:', error);
+            alert(`删除失败: ${error.message}`);
+        }
     }
 
     // 生成随机好看的颜色
@@ -1174,18 +1658,35 @@ class VoiceprintManager {
         container.innerHTML = this.speakers.map(speaker => {
             const avatarColor = this.getRandomColor(speaker.name);
 
-            // 🎯 兼容新旧数据结构
-            let voiceprints = [];
-            if (speaker.voiceprints) {
-                voiceprints = speaker.voiceprints;
-            } else if (speaker.voiceprint && speaker.voiceprint.vector) {
-                voiceprints = [speaker.voiceprint];
+            // 🎯 兼容新旧数据结构 (支持旧的voiceprints和新的samples)
+            let sampleCount = 0;
+            let vectorDim = 0;
+            let totalDuration = 0;
+            let hasVoiceprint = false;
+
+            // 新数据结构 (使用samples数组)
+            if (speaker.samples && speaker.samples.length > 0) {
+                hasVoiceprint = true;
+                sampleCount = speaker.samples.length;
+                vectorDim = speaker.voiceprintData?.featureDim || 256;
+                totalDuration = speaker.samples.reduce((sum, s) => sum + (s.duration || 0), 0);
+            }
+            // 旧数据结构 (使用voiceprints数组)
+            else if (speaker.voiceprints && speaker.voiceprints.length > 0) {
+                hasVoiceprint = true;
+                sampleCount = speaker.voiceprints.length;
+                vectorDim = speaker.voiceprints[0].vector?.length || 0;
+                totalDuration = speaker.voiceprints.reduce((sum, vp) => sum + (vp.duration || 0), 0);
+            }
+            // 最旧数据结构 (单个voiceprint对象)
+            else if (speaker.voiceprint && speaker.voiceprint.vector) {
+                hasVoiceprint = true;
+                sampleCount = 1;
+                vectorDim = speaker.voiceprint.vector.length;
+                totalDuration = speaker.voiceprint.duration || 0;
             }
 
-            const hasVoiceprint = voiceprints.length > 0;
-            const sampleCount = voiceprints.length;
-            const vectorDim = hasVoiceprint ? voiceprints[0].vector.length : 0;
-            const totalDuration = hasVoiceprint ? voiceprints.reduce((sum, vp) => sum + vp.duration, 0).toFixed(1) + 's' : '-';
+            const totalDurationStr = totalDuration > 0 ? totalDuration.toFixed(1) + 's' : '0.0s';
 
             return `
             <div class="speaker-item">
@@ -1196,7 +1697,7 @@ class VoiceprintManager {
                         ${hasVoiceprint ? `<span class="badge" style="background: #06ffa5; font-size: 0.7rem;">✓ ${sampleCount}个样本</span>` : ''}
                     </div>
                     <div class="speaker-email">${speaker.email || '无邮箱'}</div>
-                    ${hasVoiceprint ? `<div style="font-size: 0.75rem; color: var(--gray); margin-top: 4px;">向量: ${vectorDim}维 | 总时长: ${totalDuration}</div>` : ''}
+                    ${hasVoiceprint ? `<div style="font-size: 0.75rem; color: var(--gray); margin-top: 4px;">向量: ${vectorDim}维 | 总时长: ${totalDurationStr}</div>` : ''}
                 </div>
                 <div class="item-actions">
                     <button class="btn-icon delete" data-speaker-id="${speaker.id}">

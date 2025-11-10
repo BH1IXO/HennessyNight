@@ -3,15 +3,14 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { PrismaClient, Prisma } from '@prisma/client';
 import { asyncHandler, createError } from '../middleware/errorHandler';
 import { z } from 'zod';
 import multer from 'multer';
 import path from 'path';
 import audioConverter from '@/services/audio/AudioConverter';
+import { speakerStorage } from '@/services/storage/SpeakerStorage';
 
 const router = Router();
-const prisma = new PrismaClient();
 
 // 配置文件上传
 const storage = multer.diskStorage({
@@ -53,43 +52,28 @@ const createSpeakerSchema = z.object({
  * 获取说话人列表
  */
 router.get('/', asyncHandler(async (req: Request, res: Response) => {
-  const { status, limit = '20', offset = '0', search } = req.query;
+  const { search } = req.query;
 
-  const where: any = {};
+  let speakers = await speakerStorage.findAll();
 
-  if (status) where.profileStatus = status;
-
+  // 简单的搜索过滤
   if (search && typeof search === 'string') {
-    where.OR = [
-      { name: { contains: search, mode: 'insensitive' } },
-      { email: { contains: search, mode: 'insensitive' } }
-    ];
+    const searchLower = search.toLowerCase();
+    speakers = speakers.filter(s =>
+      s.name.toLowerCase().includes(searchLower) ||
+      (s.email && s.email.toLowerCase().includes(searchLower))
+    );
   }
 
-  const [speakers, total] = await Promise.all([
-    prisma.speaker.findMany({
-      where,
-      take: parseInt(limit as string),
-      skip: parseInt(offset as string),
-      orderBy: { createdAt: 'desc' },
-      include: {
-        _count: {
-          select: {
-            messages: true,
-            enrollmentAudios: true
-          }
-        }
-      }
-    }),
-    prisma.speaker.count({ where })
-  ]);
+  // 按创建时间倒序排列
+  speakers.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   res.json({
     data: speakers,
     pagination: {
-      total,
-      limit: parseInt(limit as string),
-      offset: parseInt(offset as string)
+      total: speakers.length,
+      limit: speakers.length,
+      offset: 0
     }
   });
 }));
@@ -102,28 +86,19 @@ router.post('/', upload.single('voiceFile'), asyncHandler(async (req: Request, r
   const { name, email } = req.body;
   const voiceFile = req.file;
 
-  if (!name || !email) {
-    throw createError('name and email are required', 400, 'INVALID_INPUT');
+  if (!name) {
+    throw createError('name is required', 400, 'INVALID_INPUT');
   }
 
   console.log('[Speakers API] 创建说话人:', { name, email, hasVoiceFile: !!voiceFile });
 
-  // 创建说话人记录
-  const speaker = await prisma.speaker.create({
-    data: {
-      name,
-      email: email || undefined,
-      profileStatus: voiceFile ? 'ENROLLING' : 'CREATED'
-    }
-  });
+  let voiceprintData: any = undefined;
+  let audioFilePath = voiceFile?.path;
+  let convertedFilePath: string | null = null;
+  let audioDuration: number | undefined;
 
-  let voiceprintId = null;
-
-  // 如果有声纹文件，提取特征并保存
-  if (voiceFile) {
-    let audioFilePath = voiceFile.path;
-    let convertedFilePath: string | null = null;
-
+  // 如果有声纹文件，提取特征
+  if (voiceFile && audioFilePath) {
     try {
       console.log('[Speakers API] 开始提取声纹特征...');
 
@@ -142,14 +117,15 @@ router.post('/', upload.single('voiceFile'), asyncHandler(async (req: Request, r
         console.log(`[Speakers API] 音频格式正确，无需转换`);
       }
 
-      // 调用Python脚本提取声纹特征
+      // 调用WeSpeaker提取声纹特征 (256维深度学习特征)
       const { spawn } = require('child_process');
       const pythonPath = path.join(process.cwd(), 'python', 'pyannote-env', 'Scripts', 'python.exe');
-      const scriptPath = path.join(process.cwd(), 'python', 'simple_voiceprint.py');
+      const scriptPath = path.join(process.cwd(), 'python', 'wespeaker_service.py');
 
       const extractFeatures = (): Promise<any> => {
         return new Promise((resolve, reject) => {
-          const pythonProcess = spawn(pythonPath, [scriptPath, 'extract', audioFilePath]);
+          // 使用WeSpeaker: python wespeaker_service.py extract <audio> chinese cpu
+          const pythonProcess = spawn(pythonPath, [scriptPath, 'extract', audioFilePath, 'chinese', 'cpu']);
 
           let stdout = '';
           let stderr = '';
@@ -160,7 +136,7 @@ router.post('/', upload.single('voiceFile'), asyncHandler(async (req: Request, r
 
           pythonProcess.stderr.on('data', (data: Buffer) => {
             stderr += data.toString();
-            console.log('[Voiceprint] ' + data.toString());
+            console.log('[WeSpeaker] ' + data.toString());
           });
 
           pythonProcess.on('close', (code: number) => {
@@ -169,10 +145,10 @@ router.post('/', upload.single('voiceFile'), asyncHandler(async (req: Request, r
                 const result = JSON.parse(stdout);
                 resolve(result);
               } catch (e) {
-                reject(new Error('Failed to parse voiceprint features'));
+                reject(new Error('Failed to parse WeSpeaker features'));
               }
             } else {
-              reject(new Error(`Python process exited with code ${code}: ${stderr}`));
+              reject(new Error(`WeSpeaker process exited with code ${code}: ${stderr}`));
             }
           });
 
@@ -185,40 +161,57 @@ router.post('/', upload.single('voiceFile'), asyncHandler(async (req: Request, r
       const result = await extractFeatures();
 
       if (result.success) {
-        voiceprintId = voiceFile.filename;
+        // 保存WeSpeaker声纹特征数据 (256维)
+        voiceprintData = {
+          features: result.embedding,  // WeSpeaker使用embedding字段
+          featureDim: result.shape[0],  // WeSpeaker使用shape数组
+          extractedAt: new Date().toISOString(),
+          model: 'wespeaker-chinese',
+          modelType: 'chinese'
+        };
 
-        // 更新状态为已完成，保存声纹特征数据
-        await prisma.speaker.update({
-          where: { id: speaker.id },
-          data: {
-            profileStatus: 'ENROLLED',
-            voiceFile: voiceFile.path,
-            voiceprintData: {
-              features: result.features,
-              featureDim: result.feature_dim,
-              extractedAt: new Date().toISOString()
-            }
-          }
+        console.log('[Speakers API] WeSpeaker声纹特征提取成功:', {
+          featureDim: result.shape[0],
+          model: 'wespeaker-chinese'
         });
 
-        console.log('[Speakers API] 声纹特征提取成功:', {
-          speakerId: speaker.id,
-          featureDim: result.feature_dim,
-          voiceprintId
-        });
+        // 获取音频时长（使用转换后的WAV文件，在清理之前）
+        try {
+          console.log(`[Speakers API] 开始提取音频时长: ${audioFilePath}`);
+
+          const getDuration = (): Promise<number> => {
+            return new Promise((resolve, reject) => {
+              const process = spawn(pythonPath, ['-c', `
+import soundfile as sf
+info = sf.info(r'${audioFilePath}')
+print(info.duration)
+`]);
+
+              let output = '';
+              let errorOutput = '';
+              process.stdout.on('data', (data: Buffer) => { output += data.toString(); });
+              process.stderr.on('data', (data: Buffer) => { errorOutput += data.toString(); });
+              process.on('close', (code: number) => {
+                if (code === 0) {
+                  resolve(parseFloat(output.trim()));
+                } else {
+                  reject(new Error(`Failed to get duration: ${errorOutput}`));
+                }
+              });
+            });
+          };
+
+          audioDuration = await getDuration();
+          console.log(`[Speakers API] ✅ 音频时长: ${audioDuration}秒`);
+        } catch (error) {
+          console.warn('[Speakers API] ⚠️ 无法获取音频时长:', error);
+        }
       } else {
         throw new Error('Feature extraction failed');
       }
 
     } catch (error: any) {
       console.error('[Speakers API] 声纹处理失败:', error);
-
-      // 更新状态为失败
-      await prisma.speaker.update({
-        where: { id: speaker.id },
-        data: { profileStatus: 'FAILED' }
-      });
-
       throw createError(`声纹处理失败: ${error.message}`, 500, 'VOICEPRINT_FAILED');
     } finally {
       // 清理转换后的临时文件
@@ -228,14 +221,25 @@ router.post('/', upload.single('voiceFile'), asyncHandler(async (req: Request, r
     }
   }
 
+  // 创建说话人记录（支持多样本累积）
+  const speaker = await speakerStorage.create({
+    name,
+    email: email || undefined,
+    phone: undefined,
+    voiceprintData,
+    voiceFile: voiceFile?.path
+  }, audioDuration);
+
+  // 计算统计信息
+  const sampleCount = speaker.samples?.length || 0;
+  const totalDuration = speaker.samples?.reduce((sum, s) => sum + (s.duration || 0), 0) || 0;
+
   res.status(201).json({
-    message: '声纹已成功保存',
+    message: sampleCount > 1 ? `声纹样本已添加 (共${sampleCount}个样本)` : '声纹已成功保存',
     data: {
-      id: speaker.id,
-      name: speaker.name,
-      email: speaker.email,
-      voiceprintId,
-      createdAt: speaker.createdAt
+      ...speaker,
+      sampleCount,
+      totalDuration: Math.round(totalDuration * 10) / 10  // 保留1位小数
     }
   });
 }));
@@ -297,7 +301,15 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
 router.delete('/:id', asyncHandler(async (req: Request, res: Response) => {
   const { id } = req.params;
 
-  await prisma.speaker.delete({ where: { id } });
+  console.log(`[Speakers API] 删除说话人: ${id}`);
+
+  const deleted = await speakerStorage.delete(id);
+
+  if (!deleted) {
+    throw createError('Speaker not found', 404, 'SPEAKER_NOT_FOUND');
+  }
+
+  console.log(`[Speakers API] ✅ 说话人删除成功: ${id}`);
 
   res.json({ message: '说话人删除成功' });
 }));
@@ -360,24 +372,25 @@ router.post('/identify', upload.single('audioFile'), asyncHandler(async (req: Re
 
     console.log(`   ✅ 声纹数据库构建完成，包含 ${Object.keys(voiceprintDatabase).length} 个说话人`);
 
-    // ========== 第3步：调用Python脚本进行识别 ==========
-    console.log('\n🐍 第3步：调用Python脚本进行声纹识别...');
+    // ========== 第3步：调用WeSpeaker进行识别 ==========
+    console.log('\n🐍 第3步：调用WeSpeaker进行声纹识别...');
     const { spawn } = require('child_process');
     const fs = require('fs');
     const pythonPath = path.join(process.cwd(), 'python', 'pyannote-env', 'Scripts', 'python.exe');
-    const scriptPath = path.join(process.cwd(), 'python', 'simple_voiceprint.py');
+    const scriptPath = path.join(process.cwd(), 'python', 'wespeaker_service.py');
 
     // 创建临时JSON文件存储声纹数据库
     const tempDbPath = path.join(process.cwd(), 'temp', `voiceprint-db-${Date.now()}.json`);
     await fs.promises.writeFile(tempDbPath, JSON.stringify(voiceprintDatabase, null, 2));
 
-    console.log(`   - Python脚本: ${scriptPath}`);
+    console.log(`   - WeSpeaker脚本: ${scriptPath}`);
     console.log(`   - 测试音频: ${audioFile.path}`);
     console.log(`   - 声纹数据库: ${tempDbPath}`);
 
     const identifySpeaker = (): Promise<any> => {
       return new Promise((resolve, reject) => {
-        const pythonProcess = spawn(pythonPath, [scriptPath, 'identify', audioFile.path, tempDbPath]);
+        // WeSpeaker identify: python wespeaker_service.py identify <audio> <db.json> <threshold> <model> <device>
+        const pythonProcess = spawn(pythonPath, [scriptPath, 'identify', audioFile.path, tempDbPath, '0.60', 'chinese', 'cpu']);
 
         let stdout = '';
         let stderr = '';
@@ -388,7 +401,7 @@ router.post('/identify', upload.single('audioFile'), asyncHandler(async (req: Re
 
         pythonProcess.stderr.on('data', (data: Buffer) => {
           stderr += data.toString();
-          console.log('[Voiceprint Identify] ' + data.toString());
+          console.log('[WeSpeaker Identify] ' + data.toString());
         });
 
         pythonProcess.on('close', async (code: number) => {
@@ -430,14 +443,17 @@ router.post('/identify', upload.single('audioFile'), asyncHandler(async (req: Re
       result.speaker_name = identifiedSpeaker?.name || '未知';
       result.speaker_id = result.speaker_id;
 
-      console.log(`\n   ✅✅✅ 识别成功！`);
+      console.log(`\n   ✅✅✅ WeSpeaker识别成功！`);
       console.log(`   说话人: ${result.speaker_name}`);
+      console.log(`   相似度: ${(result.similarity * 100).toFixed(1)}%`);
       console.log(`   置信度: ${(result.confidence * 100).toFixed(1)}%`);
-      console.log(`   是否超过阈值(0.7): ${result.confidence >= 0.7 ? '是' : '否'}`);
+      console.log(`   阈值: 0.60 (WeSpeaker推荐)`);
+      console.log(`   是否超过阈值: ${result.confidence >= 0.60 ? '是' : '否'}`);
     } else {
       console.log(`\n   ❌ 识别失败`);
-      console.log(`   最高置信度: ${(result.confidence * 100).toFixed(1)}%`);
-      console.log(`   未达到阈值(0.7)`);
+      console.log(`   最高相似度: ${(result.similarity * 100).toFixed(1)}%`);
+      console.log(`   置信度: ${(result.confidence * 100).toFixed(1)}%`);
+      console.log(`   未达到阈值(0.60)`);
     }
 
     // ========== 第5步：映射所有候选人 ==========

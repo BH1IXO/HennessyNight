@@ -8,8 +8,10 @@ import { asyncHandler, createError } from '../middleware/errorHandler';
 import { uploadRateLimiter } from '../middleware/rateLimiter';
 import multer from 'multer';
 import path from 'path';
+import fs from 'fs/promises';
 import { AudioProcessor } from '@/services/audio/AudioProcessor';
 import audioConverter from '@/services/audio/AudioConverter';
+import { speakerStorage } from '@/services/storage/SpeakerStorage';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -203,39 +205,27 @@ router.post('/transcribe',
 
       pythonProcess.on('close', async (code: number) => {
         if (code === 0) {
-          // 转录成功后，进行声纹比对
+          // 转录成功后，进行声纹比对 (使用WeSpeaker 256维)
           try {
-            console.log('[Transcribe] 开始声纹比对...');
+            console.log('[Transcribe] ====================');
+            console.log('[Transcribe] 🔍 开始声纹比对 (WeSpeaker 256维)...');
 
-            // 获取所有已注册的说话人声纹
-            const speakers = await prisma.speaker.findMany({
-              where: {
-                profileStatus: 'ENROLLED',
-                voiceprintData: { not: Prisma.DbNull }
-              },
-              select: {
-                id: true,
-                name: true,
-                voiceprintData: true
-              }
+            // 🔥 从JSON文件读取声纹数据 (不再使用Prisma)
+            const speakers = await speakerStorage.getAllSpeakers();
+            console.log(`[Transcribe] ====================`);
+            console.log(`[Transcribe] 📊 从JSON加载了 ${speakers.length} 个已注册声纹`);
+            console.log(`[Transcribe] 📋 声纹列表:`);
+            speakers.forEach((s: any, i: number) => {
+              const vpLength = s.voiceprintData?.features ? s.voiceprintData.features.length : 0;
+              const sampleCount = s.samples ? s.samples.length : 0;
+              console.log(`[Transcribe]   ${i + 1}. ${s.name} (${s.email}) - 向量:${vpLength}维, 样本数:${sampleCount}`);
             });
-
-            console.log(`[Transcribe] 找到 ${speakers.length} 个已注册声纹`);
+            console.log(`[Transcribe] ====================`);
 
             let identifiedSpeaker: any = null;
 
             if (speakers.length > 0) {
-              // 构建声纹数据库用于比对
-              const voiceprintDatabase: any = {};
-              for (const speaker of speakers) {
-                const vpData = speaker.voiceprintData as any;
-                if (vpData && vpData.features) {
-                  voiceprintDatabase[speaker.id] = vpData.features;
-                }
-              }
-
               // ========== 🔧 修复：在识别前先转换音频格式 ==========
-              // Python的librosa无法读取m4a/webm等格式，必须转换为WAV
               let identifyAudioPath = audioFilePath;
               let identifyConvertedFilePath: string | null = null;
 
@@ -258,87 +248,125 @@ router.post('/transcribe',
                 throw convertError;
               }
 
-              // 调用Python脚本进行声纹识别
+              // 🔥 使用WeSpeaker提取声纹特征
               const { spawn: spawnIdentify } = require('child_process');
               const pythonPath = path.join(process.cwd(), 'python', 'pyannote-env', 'Scripts', 'python.exe');
-              const scriptPath = path.join(process.cwd(), 'python', 'simple_voiceprint.py');
+              const scriptPath = path.join(process.cwd(), 'python', 'wespeaker_service.py');
 
-              // 先将数据库保存到临时JSON文件
-              const dbPath = path.join(process.cwd(), 'temp', `voiceprint_db_${Date.now()}.json`);
-              await require('fs/promises').writeFile(dbPath, JSON.stringify(voiceprintDatabase));
+              const extractFeatures = (): Promise<any> => {
+                return new Promise((resolve, reject) => {
+                  const pythonProcess = spawnIdentify(pythonPath, [scriptPath, 'extract', identifyAudioPath, 'chinese', 'cpu']);
 
-              const identifyResult = await new Promise<any>((resolve, reject) => {
-                // 使用转换后的WAV文件进行识别
-                const identifyProcess = spawnIdentify(pythonPath, [scriptPath, 'identify', identifyAudioPath, dbPath]);
+                  let stdout = '';
+                  let stderr = '';
 
-                let stdout = '';
-                let stderr = '';
+                  pythonProcess.stdout.on('data', (data: Buffer) => {
+                    stdout += data.toString();
+                  });
 
-                identifyProcess.stdout.on('data', (data: Buffer) => {
-                  stdout += data.toString();
-                });
+                  pythonProcess.stderr.on('data', (data: Buffer) => {
+                    stderr += data.toString();
+                  });
 
-                identifyProcess.stderr.on('data', (data: Buffer) => {
-                  stderr += data.toString();
-                  console.log('[Voiceprint Identify] ' + data.toString());
-                });
-
-                identifyProcess.on('close', async (code: number) => {
-                  // 删除临时数据库文件
-                  try {
-                    await require('fs/promises').unlink(dbPath);
-                  } catch (e) {
-                    // 忽略删除错误
-                  }
-
-                  // 删除声纹识别用的转换后的临时音频文件
-                  if (identifyConvertedFilePath) {
-                    try {
-                      await audioConverter.cleanupConvertedFile(identifyConvertedFilePath);
-                      console.log('[Transcribe] 已清理声纹识别临时音频文件');
-                    } catch (e) {
-                      console.error('[Transcribe] 清理声纹识别临时音频文件失败:', e);
+                  pythonProcess.on('close', async (code: number) => {
+                    // 删除声纹识别用的转换后的临时音频文件
+                    if (identifyConvertedFilePath) {
+                      try {
+                        await audioConverter.cleanupConvertedFile(identifyConvertedFilePath);
+                        console.log('[Transcribe] 已清理声纹识别临时音频文件');
+                      } catch (e) {
+                        console.error('[Transcribe] 清理声纹识别临时音频文件失败:', e);
+                      }
                     }
-                  }
 
-                  if (code === 0) {
-                    try {
-                      resolve(JSON.parse(stdout));
-                    } catch (e) {
-                      reject(new Error('Failed to parse identification result'));
+                    if (code === 0) {
+                      try {
+                        const result = JSON.parse(stdout);
+                        resolve(result);
+                      } catch (e) {
+                        reject(new Error('Failed to parse WeSpeaker features'));
+                      }
+                    } else {
+                      reject(new Error(`WeSpeaker process exited with code ${code}: ${stderr}`));
                     }
-                  } else {
-                    reject(new Error(`Identification failed with code ${code}: ${stderr}`));
-                  }
+                  });
+
+                  pythonProcess.on('error', (error: Error) => {
+                    reject(error);
+                  });
                 });
+              };
 
-                identifyProcess.on('error', (error: Error) => {
-                  reject(error);
-                });
-              });
+              const result = await extractFeatures();
 
-              console.log('[Transcribe] 声纹识别结果:', identifyResult);
+              if (!result.success) {
+                throw new Error('Feature extraction failed');
+              }
 
-              if (identifyResult.identified) {
-                // 找到匹配的说话人
-                const matchedSpeaker = speakers.find(s => s.id === identifyResult.speaker_id);
-                if (matchedSpeaker) {
-                  identifiedSpeaker = {
-                    id: matchedSpeaker.id,
-                    name: matchedSpeaker.name,
-                    confidence: identifyResult.confidence
-                  };
-                  console.log(`[Transcribe] 识别到说话人: ${matchedSpeaker.name} (置信度: ${(identifyResult.confidence * 100).toFixed(1)}%)`);
+              const userEmbedding = result.embedding;
+              console.log(`[Transcribe] ====================`);
+              console.log(`[Transcribe] ✅ WeSpeaker特征提取完成: ${userEmbedding.length}维`);
+              console.log(`[Transcribe] 🔢 特征向量预览: [${userEmbedding.slice(0, 5).map((v: number) => v.toFixed(4)).join(', ')}...]`);
+              console.log(`[Transcribe] ====================`);
+              console.log(`[Transcribe] 🔍 开始声纹比对...`);
+
+              // 🔥 计算余弦相似度
+              const cosineSimilarity = (a: number[], b: number[]): number => {
+                if (a.length !== b.length) return 0;
+                let dotProduct = 0;
+                let normA = 0;
+                let normB = 0;
+                for (let i = 0; i < a.length; i++) {
+                  dotProduct += a[i] * b[i];
+                  normA += a[i] * a[i];
+                  normB += b[i] * b[i];
                 }
+                return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+              };
+
+              // 🔥 匹配说话人
+              let bestMatch: any = null;
+              let bestSimilarity = 0;
+
+              for (const speaker of speakers) {
+                if (!speaker.voiceprintData?.features || speaker.voiceprintData.features.length === 0) {
+                  console.log(`[Transcribe]   ⚠️ ${speaker.name}: 无声纹数据，跳过`);
+                  continue;
+                }
+
+                const similarity = cosineSimilarity(userEmbedding, speaker.voiceprintData.features);
+                console.log(`[Transcribe]   📊 ${speaker.name}: ${(similarity * 100).toFixed(2)}% (向量维度:${speaker.voiceprintData.features.length})`);
+
+                if (similarity > bestSimilarity) {
+                  bestSimilarity = similarity;
+                  bestMatch = speaker;
+                }
+              }
+
+              // 🔥 阈值判断 (实时音频使用更宽松的阈值)
+              const threshold = 0.32;  // 降低到32%以提高实时识别率
+              console.log(`[Transcribe] ====================`);
+              console.log(`[Transcribe] 🎯 识别阈值: ${(threshold * 100).toFixed(0)}% (实时模式-宽松)`);
+              console.log(`[Transcribe] 🏆 最高相似度: ${bestMatch ? bestMatch.name : '无'} - ${(bestSimilarity * 100).toFixed(2)}%`);
+
+              if (bestMatch && bestSimilarity >= threshold) {
+                console.log(`[Transcribe] ✅ 识别成功: ${bestMatch.name} (${(bestSimilarity * 100).toFixed(2)}%)`);
+                console.log(`[Transcribe] ====================`);
+                identifiedSpeaker = {
+                  id: bestMatch.id,
+                  name: bestMatch.name,
+                  confidence: bestSimilarity
+                };
               } else {
-                console.log('[Transcribe] 未识别到说话人 (置信度不足或无匹配)');
+                console.log(`[Transcribe] ❌ 未匹配到说话人 (最高相似度: ${(bestSimilarity * 100).toFixed(2)}% < 阈值${(threshold * 100).toFixed(0)}%)`);
+                console.log(`[Transcribe] ====================`);
                 identifiedSpeaker = {
                   name: '未识别说话人',
-                  confidence: identifyResult.confidence || 0
+                  confidence: bestSimilarity
                 };
               }
             } else {
-              console.log('[Transcribe] 数据库中没有已注册的声纹');
+              console.log('[Transcribe] ⚠️ 没有已注册的声纹');
               identifiedSpeaker = {
                 name: '未识别说话人',
                 confidence: 0
@@ -495,111 +523,156 @@ router.post('/transcribe-file',
         try {
           console.log(`[TranscribeFile] 转录完成，共 ${rawResults.length} 个结果片段`);
 
-          // 🔥 获取说话人列表: 优先使用客户端发送的,否则从数据库读取
-          let speakers: any[] = [];
+          // 🔥 从JSON文件读取声纹数据
+          console.log('[TranscribeFile] ====================');
+          console.log('[TranscribeFile] 📊 加载已注册声纹数据...');
 
-          if (clientSpeakers && clientSpeakers.length > 0) {
-            // 使用客户端发送的说话人列表
-            speakers = clientSpeakers.map((s: any) => ({
-              id: s.id,
-              name: s.name,
-              voiceprint: s.voiceprint
-            }));
-            console.log(`[TranscribeFile] 使用客户端发送的 ${speakers.length} 个说话人:`, speakers.map(s => s.name).join(', '));
-          } else {
-            // 尝试从数据库读取
-            try {
-              speakers = await prisma.speaker.findMany({
-                where: {
-                  profileStatus: 'ENROLLED',
-                  voiceprint: { not: null }
-                }
-              });
-              console.log(`[TranscribeFile] 从数据库加载 ${speakers.length} 个已注册说话人`);
-            } catch (dbError) {
-              console.warn('[TranscribeFile] 数据库不可用,无说话人数据');
-              speakers = [];
-            }
+          const speakers = await speakerStorage.findAll();
+          console.log(`[TranscribeFile] 📋 从JSON加载了 ${speakers.length} 个已注册声纹`);
+
+          if (speakers.length > 0) {
+            console.log(`[TranscribeFile] 📋 声纹列表:`);
+            speakers.forEach((s: any, i: number) => {
+              const vpLength = s.voiceprintData?.features ? s.voiceprintData.features.length : 0;
+              const sampleCount = s.samples ? s.samples.length : 0;
+              console.log(`[TranscribeFile]   ${i + 1}. ${s.name} (${s.email}) - 向量:${vpLength}维, 样本数:${sampleCount}`);
+            });
           }
+          console.log('[TranscribeFile] ====================');
 
-          // 🔥 如果有说话人数据,使用Python脚本进行说话人分离和识别
-          let speakerSegments: any[] = [];
+          // 🔥 使用WeSpeaker对整个音频文件进行声纹识别
+          let identifiedSpeaker: any = null;
+
           if (speakers.length > 0) {
             try {
-              console.log(`[TranscribeFile] 调用说话人分离脚本...`);
+              console.log('[TranscribeFile] ====================');
+              console.log('[TranscribeFile] 🔍 使用WeSpeaker进行声纹识别...');
 
-              const { spawn } = require('child_process');
-              const pythonPath = process.env.PYTHON_PATH || 'python';
-              const scriptPath = path.join(__dirname, '../../../python/speaker_diarization.py');
+              const { spawn: spawnWeSpeaker } = require('child_process');
+              const pythonPath = path.join(process.cwd(), 'python', 'pyannote-env', 'Scripts', 'python.exe');
+              const scriptPath = path.join(process.cwd(), 'python', 'wespeaker_service.py');
 
-              const diarizationResult = await new Promise<any>((resolve, reject) => {
-                const diarizationProcess = spawn(pythonPath, [
-                  scriptPath,
-                  convertedFilePath || uploadedFile.path,
-                  JSON.stringify(speakers)
-                ]);
+              const extractFeatures = (): Promise<any> => {
+                return new Promise((resolve, reject) => {
+                  const pythonProcess = spawnWeSpeaker(pythonPath, [scriptPath, 'extract', audioFilePath, 'chinese', 'cpu']);
 
-                let outputData = '';
-                let errorData = '';
+                  let stdout = '';
+                  let stderr = '';
 
-                diarizationProcess.stdout.on('data', (data: Buffer) => {
-                  outputData += data.toString();
-                });
+                  pythonProcess.stdout.on('data', (data: Buffer) => {
+                    stdout += data.toString();
+                  });
 
-                diarizationProcess.stderr.on('data', (data: Buffer) => {
-                  errorData += data.toString();
-                  console.log('[SpeakerDiarization]', data.toString());
-                });
+                  pythonProcess.stderr.on('data', (data: Buffer) => {
+                    stderr += data.toString();
+                  });
 
-                diarizationProcess.on('close', (code: number) => {
-                  if (code !== 0) {
-                    console.error('[SpeakerDiarization] 错误输出:', errorData);
-                    reject(new Error(`说话人分离失败，退出码: ${code}`));
-                  } else {
-                    try {
-                      const result = JSON.parse(outputData);
-                      if (result.success) {
-                        resolve(result.segments);
-                      } else {
-                        reject(new Error(result.error || '说话人分离失败'));
+                  pythonProcess.on('close', (code: number) => {
+                    if (code === 0) {
+                      try {
+                        const result = JSON.parse(stdout);
+                        resolve(result);
+                      } catch (e) {
+                        reject(new Error('Failed to parse WeSpeaker features'));
                       }
-                    } catch (e) {
-                      reject(new Error('解析说话人分离结果失败'));
+                    } else {
+                      reject(new Error(`WeSpeaker process exited with code ${code}: ${stderr}`));
                     }
-                  }
-                });
-              });
+                  });
 
-              speakerSegments = diarizationResult;
-              console.log(`[TranscribeFile] 说话人分离完成，共 ${speakerSegments.length} 个片段`);
+                  pythonProcess.on('error', (error: Error) => {
+                    reject(error);
+                  });
+                });
+              };
+
+              const result = await extractFeatures();
+
+              if (!result.success) {
+                throw new Error('Feature extraction failed');
+              }
+
+              const userEmbedding = result.embedding;
+              console.log(`[TranscribeFile] ====================`);
+              console.log(`[TranscribeFile] ✅ WeSpeaker特征提取完成: ${userEmbedding.length}维`);
+              console.log(`[TranscribeFile] 🔢 特征向量预览: [${userEmbedding.slice(0, 5).map((v: number) => v.toFixed(4)).join(', ')}...]`);
+              console.log(`[TranscribeFile] ====================`);
+              console.log(`[TranscribeFile] 🔍 开始声纹比对...`);
+
+              // 🔥 计算余弦相似度
+              const cosineSimilarity = (a: number[], b: number[]): number => {
+                if (a.length !== b.length) return 0;
+                let dotProduct = 0;
+                let normA = 0;
+                let normB = 0;
+                for (let i = 0; i < a.length; i++) {
+                  dotProduct += a[i] * b[i];
+                  normA += a[i] * a[i];
+                  normB += b[i] * b[i];
+                }
+                return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+              };
+
+              // 🔥 匹配说话人
+              let bestMatch: any = null;
+              let bestSimilarity = 0;
+
+              for (const speaker of speakers) {
+                if (!speaker.voiceprintData?.features || speaker.voiceprintData.features.length === 0) {
+                  console.log(`[TranscribeFile]   ⚠️ ${speaker.name}: 无声纹数据，跳过`);
+                  continue;
+                }
+
+                const similarity = cosineSimilarity(userEmbedding, speaker.voiceprintData.features);
+                console.log(`[TranscribeFile]   📊 ${speaker.name}: ${(similarity * 100).toFixed(2)}% (向量维度:${speaker.voiceprintData.features.length})`);
+
+                if (similarity > bestSimilarity) {
+                  bestSimilarity = similarity;
+                  bestMatch = speaker;
+                }
+              }
+
+              // 🔥 阈值判断 (实时音频使用更宽松的阈值)
+              const threshold = 0.32;  // 降低到32%以提高实时识别率
+              console.log(`[TranscribeFile] ====================`);
+              console.log(`[TranscribeFile] 🎯 识别阈值: ${(threshold * 100).toFixed(0)}% (实时模式-宽松)`);
+              console.log(`[TranscribeFile] 🏆 最高相似度: ${bestMatch ? bestMatch.name : '无'} - ${(bestSimilarity * 100).toFixed(2)}%`);
+
+              if (bestMatch && bestSimilarity >= threshold) {
+                console.log(`[TranscribeFile] ✅ 识别成功: ${bestMatch.name} (${(bestSimilarity * 100).toFixed(2)}%)`);
+                console.log(`[TranscribeFile] ====================`);
+                identifiedSpeaker = {
+                  name: bestMatch.name,
+                  confidence: bestSimilarity
+                };
+              } else {
+                console.log(`[TranscribeFile] ❌ 未匹配到说话人 (最高相似度: ${(bestSimilarity * 100).toFixed(2)}% < 阈值${(threshold * 100).toFixed(0)}%)`);
+                console.log(`[TranscribeFile] ====================`);
+                identifiedSpeaker = {
+                  name: '未识别说话人',
+                  confidence: bestSimilarity
+                };
+              }
 
             } catch (error) {
-              console.error('[TranscribeFile] 说话人分离失败:', error);
-              // 继续使用循环分配作为降级方案
+              console.error('[TranscribeFile] 声纹识别失败:', error);
+              identifiedSpeaker = {
+                name: '未识别说话人',
+                confidence: 0
+              };
             }
+          } else {
+            console.log('[TranscribeFile] ⚠️ 没有已注册的声纹');
+            identifiedSpeaker = {
+              name: '未识别说话人',
+              confidence: 0
+            };
           }
 
-          // 按断句处理转录结果 + 声纹识别
+          // 按断句处理转录结果 (使用整个音频文件的声纹识别结果)
           const segments: any[] = [];
           let currentSegment = '';
           let segmentStartTime = 0;
-          let segmentAudioData: number[] = []; // 用于声纹识别的音频数据
-
-          // 🔥 辅助函数: 根据时间查找对应的说话人片段
-          const findSpeakerAtTime = (timeIndex: number): any => {
-            if (speakerSegments.length === 0) return null;
-
-            // 将转录索引映射到实际时间（简单假设每个结果1秒）
-            const estimatedTime = timeIndex * 1.0;
-
-            for (const segment of speakerSegments) {
-              if (estimatedTime >= segment.start && estimatedTime <= segment.end) {
-                return segment.speaker;
-              }
-            }
-
-            return null;
-          };
 
           for (let i = 0; i < rawResults.length; i++) {
             const result = rawResults[i];
@@ -615,42 +688,10 @@ router.post('/transcribe-file',
                                 i === rawResults.length - 1;
 
             if (shouldBreak && currentSegment.trim()) {
-              let identifiedSpeaker = {
-                name: '未识别说话人',
-                confidence: 0
-              };
-
-              // 🔥 尝试声纹识别（如果有已注册的说话人）
-              if (speakers.length > 0) {
-                try {
-                  // 优先使用Python脚本的说话人分离结果
-                  if (speakerSegments.length > 0) {
-                    const speakerInfo = findSpeakerAtTime(i);
-                    if (speakerInfo) {
-                      identifiedSpeaker = speakerInfo;
-                      console.log(`[TranscribeFile] 片段 ${segments.length + 1} (时间~${i}s) 识别为: ${speakerInfo.name} (置信度: ${(speakerInfo.confidence * 100).toFixed(1)}%)`);
-                    }
-                  } else {
-                    // 降级方案: 基于片段index循环分配说话人
-                    const speakerIndex = segments.length % speakers.length;
-                    const assignedSpeaker = speakers[speakerIndex];
-
-                    identifiedSpeaker = {
-                      name: assignedSpeaker.name,
-                      confidence: 0.5 // 临时置信度
-                    };
-
-                    console.log(`[TranscribeFile] 片段 ${segments.length + 1} 循环分配给: ${assignedSpeaker.name}`);
-                  }
-                } catch (error) {
-                  console.error('[TranscribeFile] 声纹识别失败:', error);
-                }
-              }
-
-              // 添加到segments
+              // 添加到segments (所有片段使用同一个说话人,因为是对整个音频文件识别的)
               segments.push({
                 text: currentSegment.trim(),
-                speaker: identifiedSpeaker,
+                speaker: identifiedSpeaker || { name: '未识别说话人', confidence: 0 },
                 timestamp: new Date().toLocaleTimeString(),
                 startTime: segmentStartTime,
                 endTime: i
@@ -659,7 +700,6 @@ router.post('/transcribe-file',
               // 重置
               currentSegment = '';
               segmentStartTime = i + 1;
-              segmentAudioData = [];
             }
           }
 
@@ -714,6 +754,353 @@ router.post('/transcribe-file',
       }
 
       throw createError(`音频处理失败: ${error.message}`, 500, 'PROCESSING_FAILED');
+    }
+  })
+);
+
+/**
+ * POST /api/v1/audio/identify-speaker
+ * 实时声纹识别 (使用WeSpeaker 256维)
+ */
+router.post('/identify-speaker',
+  (req, res, next) => {
+    console.log('[IdentifySpeaker] ⚡ 请求到达路由 (BEFORE multer middleware)');
+    console.log('[IdentifySpeaker] Content-Type:', req.get('content-type'));
+    console.log('[IdentifySpeaker] Method:', req.method);
+    next();
+  },
+  (req, res, next) => {
+    // Multer中间件包装 - 用于捕获multer错误
+    const multerMiddleware = upload.single('audioFile');
+    multerMiddleware(req, res, (err: any) => {
+      if (err) {
+        console.error('[IdentifySpeaker] ❌ Multer错误 - 文件上传失败:');
+        console.error('[IdentifySpeaker] 错误类型:', err.constructor.name);
+        console.error('[IdentifySpeaker] 错误消息:', err.message);
+        console.error('[IdentifySpeaker] 错误代码:', err.code);
+        console.error('[IdentifySpeaker] 错误字段:', err.field);
+        console.error('[IdentifySpeaker] 完整错误:', err);
+        return res.status(400).json({
+          error: '文件上传失败',
+          message: err.message,
+          code: err.code || 'MULTER_ERROR'
+        });
+      }
+      console.log('[IdentifySpeaker] ✅ Multer处理完成');
+      console.log('[IdentifySpeaker] 文件是否存在:', !!req.file);
+      if (req.file) {
+        console.log('[IdentifySpeaker] 文件信息:', {
+          fieldname: req.file.fieldname,
+          originalname: req.file.originalname,
+          mimetype: req.file.mimetype,
+          size: req.file.size
+        });
+      }
+      next();
+    });
+  },
+  asyncHandler(async (req: Request, res: Response) => {
+    // 🔍 最早期日志 - 检查是否进入handler
+    console.log('='.repeat(80));
+    console.log('[IdentifySpeaker] 🚀 ENTRY POINT - 进入识别handler');
+    console.log('[IdentifySpeaker] 请求时间:', new Date().toISOString());
+    console.log('[IdentifySpeaker] 请求方法:', req.method);
+    console.log('[IdentifySpeaker] 请求路径:', req.path);
+    console.log('[IdentifySpeaker] Content-Type:', req.get('content-type'));
+    console.log('='.repeat(80));
+
+    console.log('[IdentifySpeaker] 开始实时声纹识别');
+
+    const audioFile = req.file;
+    const speakersData = req.body.speakers;
+
+    console.log('[IdentifySpeaker] 📥 接收到的数据:');
+    console.log('[IdentifySpeaker]   - audioFile:', audioFile ? `存在 (${audioFile.originalname}, ${audioFile.size} bytes)` : '不存在');
+    console.log('[IdentifySpeaker]   - speakersData:', speakersData ? `存在 (长度:${speakersData.length})` : '不存在');
+
+    if (!audioFile) {
+      throw createError('未提供音频文件', 400, 'NO_AUDIO_FILE');
+    }
+
+    if (!speakersData) {
+      throw createError('未提供声纹数据', 400, 'NO_SPEAKERS');
+    }
+
+    let convertedFilePath: string | null = null;
+
+    try {
+      const audioFilePath = audioFile.path;
+      console.log(`[IdentifySpeaker] 音频文件: ${audioFilePath}`);
+      console.log(`[IdentifySpeaker] 文件大小: ${audioFile.size} bytes`);
+
+      // 检查文件大小 - 拒绝太小的文件(可能损坏或太短)
+      if (audioFile.size < 1000) {
+        console.log(`[IdentifySpeaker] ⚠️ 音频文件太小 (${audioFile.size} bytes),跳过识别`);
+
+        // 清理文件
+        setTimeout(async () => {
+          try {
+            await fs.unlink(audioFile.path).catch(() => {});
+            console.log('[IdentifySpeaker] 小文件已清理');
+          } catch (e) {
+            console.error('[IdentifySpeaker] 清理小文件失败:', e);
+          }
+        }, 100);
+
+        return res.json({
+          success: true,
+          data: {
+            matched: false,
+            message: '音频太短,无法识别'
+          }
+        });
+      }
+
+      // 解析声纹数据
+      const speakers = JSON.parse(speakersData);
+      console.log(`[IdentifySpeaker] ====================`);
+      console.log(`[IdentifySpeaker] 📊 声纹数量: ${speakers.length}`);
+      console.log(`[IdentifySpeaker] 📋 声纹列表:`);
+      speakers.forEach((s: any, i: number) => {
+        const vpLength = s.voiceprint ? s.voiceprint.length : 0;
+        console.log(`[IdentifySpeaker]   ${i + 1}. ${s.name} (ID:${s.id}) - 向量维度:${vpLength}维`);
+      });
+      console.log(`[IdentifySpeaker] ====================`);
+
+      if (speakers.length === 0) {
+        console.log(`[IdentifySpeaker] ⚠️ 没有注册声纹，跳过识别`);
+        return res.json({
+          success: true,
+          data: {
+            matched: false,
+            message: '没有注册声纹'
+          }
+        });
+      }
+
+      // 🎯 检查音频参数并转换格式
+      console.log(`[IdentifySpeaker] 正在检查音频参数...`);
+      try {
+        const audioInfo = await audioConverter.getAudioInfo(audioFilePath);
+        console.log(`[IdentifySpeaker] 📊 接收到的音频参数:`);
+        console.log(`[IdentifySpeaker]   - 格式: ${audioInfo.format}`);
+        console.log(`[IdentifySpeaker]   - 采样率: ${audioInfo.sampleRate}Hz`);
+        console.log(`[IdentifySpeaker]   - 声道数: ${audioInfo.channels}`);
+        console.log(`[IdentifySpeaker]   - 比特率: ${audioInfo.bitrate}`);
+        console.log(`[IdentifySpeaker]   - 时长: ${audioInfo.duration.toFixed(2)}秒`);
+      } catch (infoError) {
+        console.warn(`[IdentifySpeaker] ⚠️ 无法获取音频信息:`, infoError);
+      }
+
+      const needsConversion = await audioConverter.needsConversion(audioFilePath);
+      let processedAudioPath = audioFilePath;
+
+      if (needsConversion) {
+        console.log(`[IdentifySpeaker] 需要转换音频格式 → 目标: 16kHz, 单声道, WAV`);
+        convertedFilePath = await audioConverter.convertToVoskFormat({
+          inputPath: audioFilePath
+        });
+        processedAudioPath = convertedFilePath;
+        console.log(`[IdentifySpeaker] ✅ 音频转换完成: ${convertedFilePath}`);
+      } else {
+        console.log(`[IdentifySpeaker] ✅ 音频格式正确,无需转换`);
+      }
+
+      // 使用WeSpeaker提取声纹特征
+      const { spawn } = require('child_process');
+      const pythonPath = path.join(process.cwd(), 'python', 'pyannote-env', 'Scripts', 'python.exe');
+      const scriptPath = path.join(process.cwd(), 'python', 'wespeaker_service.py');
+
+      const extractFeatures = (): Promise<any> => {
+        return new Promise((resolve, reject) => {
+          const pythonProcess = spawn(pythonPath, [scriptPath, 'extract', processedAudioPath, 'chinese', 'cpu']);
+
+          let stdout = '';
+          let stderr = '';
+
+          pythonProcess.stdout.on('data', (data: Buffer) => {
+            stdout += data.toString();
+          });
+
+          pythonProcess.stderr.on('data', (data: Buffer) => {
+            stderr += data.toString();
+          });
+
+          pythonProcess.on('close', (code: number) => {
+            if (code === 0) {
+              try {
+                const result = JSON.parse(stdout);
+                resolve(result);
+              } catch (e) {
+                reject(new Error('Failed to parse WeSpeaker features'));
+              }
+            } else {
+              reject(new Error(`WeSpeaker process exited with code ${code}: ${stderr}`));
+            }
+          });
+
+          pythonProcess.on('error', (error: Error) => {
+            reject(error);
+          });
+        });
+      };
+
+      const result = await extractFeatures();
+
+      if (!result.success) {
+        throw new Error('Feature extraction failed');
+      }
+
+      const userEmbedding = result.embedding;
+      console.log(`[IdentifySpeaker] ====================`);
+      console.log(`[IdentifySpeaker] ✅ 特征提取完成: ${userEmbedding.length}维`);
+      console.log(`[IdentifySpeaker] 🔢 特征向量预览: [${userEmbedding.slice(0, 5).map((v: number) => v.toFixed(4)).join(', ')}...]`);
+      console.log(`[IdentifySpeaker] ====================`);
+      console.log(`[IdentifySpeaker] 🔍 开始声纹比对...`);
+
+      // 计算余弦相似度
+      const cosineSimilarity = (a: number[], b: number[]): number => {
+        if (a.length !== b.length) return 0;
+        let dotProduct = 0;
+        let normA = 0;
+        let normB = 0;
+        for (let i = 0; i < a.length; i++) {
+          dotProduct += a[i] * b[i];
+          normA += a[i] * a[i];
+          normB += b[i] * b[i];
+        }
+        return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+      };
+
+      // 匹配说话人
+      let bestMatch: any = null;
+      let bestSimilarity = 0;
+      let allScores: { name: string; similarity: number }[] = [];
+
+      for (const speaker of speakers) {
+        if (!speaker.voiceprint || speaker.voiceprint.length === 0) {
+          console.log(`[IdentifySpeaker]   ⚠️ ${speaker.name}: 无声纹数据，跳过`);
+          continue;
+        }
+
+        const similarity = cosineSimilarity(userEmbedding, speaker.voiceprint);
+        allScores.push({ name: speaker.name, similarity });
+        console.log(`[IdentifySpeaker]   📊 ${speaker.name}: ${(similarity * 100).toFixed(2)}% (向量维度:${speaker.voiceprint.length})`);
+
+        if (similarity > bestSimilarity) {
+          bestSimilarity = similarity;
+          bestMatch = speaker;
+        }
+      }
+
+      // 🎯 阈值判断 (实时音频使用更宽松的阈值)
+      // 注册声纹时音质好: 0.4-0.5
+      // 实时识别音质差: 0.30-0.35 (宽松)
+      const threshold = 0.32;  // 降低到32%以提高实时识别率
+      console.log(`[IdentifySpeaker] ====================`);
+      console.log(`[IdentifySpeaker] 🎯 识别阈值: ${(threshold * 100).toFixed(0)}% (实时模式-宽松)`);
+      console.log(`[IdentifySpeaker] 🏆 最高相似度: ${bestMatch ? bestMatch.name : '无'} - ${(bestSimilarity * 100).toFixed(2)}%`);
+
+      if (bestMatch && bestSimilarity >= threshold) {
+        console.log(`[IdentifySpeaker] ✅ 识别成功: ${bestMatch.name} (${(bestSimilarity * 100).toFixed(2)}%)`);
+        console.log(`[IdentifySpeaker] ====================`);
+
+        // 先发送响应，在响应完成后再清理临时文件
+        const responseData = {
+          success: true,
+          data: {
+            matched: true,
+            speaker: bestMatch,
+            similarity: bestSimilarity,
+            allScores
+          }
+        };
+
+        // 延迟清理文件（不阻塞响应）
+        setTimeout(async () => {
+          try {
+            if (convertedFilePath) {
+              await audioConverter.cleanupConvertedFile(convertedFilePath);
+            }
+            if (audioFile) {
+              await fs.unlink(audioFile.path).catch(() => {});
+            }
+            console.log('[IdentifySpeaker] 临时文件清理完成');
+          } catch (cleanupError) {
+            console.error('[IdentifySpeaker] 清理临时文件失败:', cleanupError);
+          }
+        }, 100);
+
+        return res.json(responseData);
+      } else {
+        console.log(`[IdentifySpeaker] ❌ 未匹配到说话人 (最高相似度: ${(bestSimilarity * 100).toFixed(2)}% < 阈值${(threshold * 100).toFixed(0)}%)`);
+        console.log(`[IdentifySpeaker] ====================`);
+
+        // 先发送响应，在响应完成后再清理临时文件
+        const responseData = {
+          success: true,
+          data: {
+            matched: false,
+            bestSimilarity: bestSimilarity,
+            allScores
+          }
+        };
+
+        // 延迟清理文件（不阻塞响应）
+        setTimeout(async () => {
+          try {
+            if (convertedFilePath) {
+              await audioConverter.cleanupConvertedFile(convertedFilePath);
+            }
+            if (audioFile) {
+              await fs.unlink(audioFile.path).catch(() => {});
+            }
+            console.log('[IdentifySpeaker] 临时文件清理完成');
+          } catch (cleanupError) {
+            console.error('[IdentifySpeaker] 清理临时文件失败:', cleanupError);
+          }
+        }, 100);
+
+        return res.json(responseData);
+      }
+
+    } catch (error: any) {
+      console.error('='.repeat(80));
+      console.error('[IdentifySpeaker] ❌ 识别失败 - 详细错误信息:');
+      console.error('[IdentifySpeaker] 错误消息:', error.message);
+      console.error('[IdentifySpeaker] 错误类型:', error.constructor.name);
+      console.error('[IdentifySpeaker] 错误栈:');
+      console.error(error.stack);
+      console.error('[IdentifySpeaker] audioFile 存在:', !!audioFile);
+      console.error('[IdentifySpeaker] convertedFilePath:', convertedFilePath);
+      console.error('='.repeat(80));
+
+      // 清理临时文件（错误路径）- 延迟清理避免阻塞响应
+      setTimeout(async () => {
+        try {
+          if (convertedFilePath) {
+            await audioConverter.cleanupConvertedFile(convertedFilePath);
+          }
+          if (audioFile) {
+            await fs.unlink(audioFile.path).catch(() => {});
+          }
+          console.log('[IdentifySpeaker] 错误路径下的文件清理完成');
+        } catch (cleanupError) {
+          console.error('[IdentifySpeaker] 清理临时文件失败:', cleanupError);
+        }
+      }, 100);
+
+      // ⚠️ 重要: 即使发生错误,也返回200状态码和"未识别"结果
+      // 这样前端可以正常更新UI,而不是显示错误状态
+      console.log('[IdentifySpeaker] 🔄 返回"未识别"响应(避免前端500错误)');
+      return res.json({
+        success: true,
+        data: {
+          matched: false,
+          message: '识别失败',
+          error: error.message
+        }
+      });
     }
   })
 );
