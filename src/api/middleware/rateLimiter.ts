@@ -21,6 +21,10 @@ export const rateLimiter = rateLimit({
   max: 100, // 每个IP最多100个请求
   standardHeaders: true,
   legacyHeaders: false,
+  // 🎯 排除实时语音识别接口（需要高频请求）
+  skip: (req) => {
+    return req.path === '/api/v1/audio/identify-speaker';
+  },
   message: {
     error: {
       code: 'RATE_LIMIT_EXCEEDED',

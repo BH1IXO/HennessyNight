@@ -94,16 +94,29 @@ class RealtimeSpeechManager {
             }
         };
 
-        // 错误处理
+        // 错误处理 - 增强所有错误类型的处理
         this.recognition.onerror = (event) => {
-            if (event.error === 'no-speech' || event.error === 'network') {
-                if (this.isRecording) {
-                    setTimeout(() => {
-                        try {
+            console.warn(`⚠️ 语音识别错误: ${event.error}`);
+
+            // 对于大多数错误,都尝试重启(除了用户主动停止的情况)
+            const retriableErrors = ['no-speech', 'network', 'audio-capture', 'aborted', 'not-allowed'];
+            if (retriableErrors.includes(event.error) && this.isRecording) {
+                console.log(`🔄 尝试重启语音识别 (原因: ${event.error})`);
+                setTimeout(() => {
+                    try {
+                        if (this.isRecording) {
                             this.recognition.start();
-                        } catch (e) {}
-                    }, 100);
-                }
+                            console.log('✅ 语音识别已重启');
+                        }
+                    } catch (e) {
+                        console.error('❌ 重启识别失败:', e);
+                    }
+                }, 100);
+            } else if (event.error === 'not-allowed') {
+                console.error('❌ 用户拒绝了麦克风权限');
+                this.eventBus.emit('error', { message: '需要麦克风权限才能进行语音识别' });
+            } else {
+                console.error(`❌ 无法处理的识别错误: ${event.error}`);
             }
         };
 
@@ -583,6 +596,22 @@ class RealtimeSpeechManager {
                             console.log(`🔄 [前端] 检测到说话人变化: ${this.lastIdentifiedSpeaker || '初始'} -> ${match.speaker.name}`);
                             this.lastIdentifiedSpeaker = match.speaker.name;
                             this.consecutiveSameSpeaker = 1;
+
+                            // 🔥 关键修复：重启浏览器语音识别，让它适应新的声音
+                            if (this.isRecording && this.recognition) {
+                                console.log('🔄 说话人切换，重启浏览器语音识别以适应新声音...');
+                                try {
+                                    this.recognition.stop();
+                                    setTimeout(() => {
+                                        if (this.isRecording) {
+                                            this.recognition.start();
+                                            console.log('✅ 语音识别已重启，可识别新说话人');
+                                        }
+                                    }, 200);
+                                } catch (e) {
+                                    console.error('❌ 重启识别失败:', e);
+                                }
+                            }
                         } else {
                             this.consecutiveSameSpeaker++;
                             console.log(`✔️ [前端] 说话人未变化: ${match.speaker.name} (连续${this.consecutiveSameSpeaker}次)`);
@@ -1057,6 +1086,12 @@ class UIManager {
             // 移除加载动画
             if (spinner) {
                 spinner.remove();
+            }
+
+            // 🎯 重要：如果这是当前消息块，更新lastSpeaker
+            if (this.currentMessageElement === messageElement) {
+                this.lastSpeaker = speaker;
+                console.log(`🔄 更新lastSpeaker为: ${speaker.name}`);
             }
 
             console.log(`✅ UI已更新 [ID:${messageId}]: ${speaker.name}`);
