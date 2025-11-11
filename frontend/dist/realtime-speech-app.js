@@ -1305,8 +1305,14 @@ class UIManager {
      * 🎯 显示倒计时动画（3, 2, 1）
      */
     async showCountdown() {
-        const transcriptArea = document.getElementById('transcript');
-        if (!transcriptArea) return;
+        const transcriptArea = document.getElementById('transcriptDisplay');
+        if (!transcriptArea) {
+            console.error('找不到transcriptDisplay元素');
+            return;
+        }
+
+        // 设置父容器为相对定位
+        transcriptArea.style.position = 'relative';
 
         // 创建倒计时容器
         const countdownDiv = document.createElement('div');
@@ -1336,8 +1342,7 @@ class UIManager {
         `;
 
         countdownDiv.appendChild(countdownNumber);
-        transcriptArea.parentElement.style.position = 'relative';
-        transcriptArea.parentElement.appendChild(countdownDiv);
+        transcriptArea.appendChild(countdownDiv);
 
         // 添加动画样式
         if (!document.getElementById('countdown-animation-style')) {
