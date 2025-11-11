@@ -7,6 +7,7 @@ import { Router, Request, Response } from 'express';
 import { asyncHandler, createError } from '../middleware/errorHandler';
 import { z } from 'zod';
 import { KnowledgeBaseDB } from '../../db/knowledgebase';
+import db from '../../db/knowledgebase';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
@@ -408,6 +409,87 @@ router.post('/upload-document', upload.single('document'), asyncHandler(async (r
 
     throw error;
   }
+}));
+
+/**
+ * POST /api/v1/terms/match-text
+ * 匹配文本中的知识库术语
+ */
+router.post('/match-text', asyncHandler(async (req: Request, res: Response) => {
+  const { text } = req.body;
+
+  if (!text || typeof text !== 'string') {
+    throw createError('text is required and must be a string', 400, 'INVALID_INPUT');
+  }
+
+  console.log('[Terms API] 匹配文本中的术语, 文本长度:', text.length);
+
+  // 获取所有术语
+  const allTerms = KnowledgeBaseDB.getAll(1000, 0);
+
+  // 匹配文本中的术语
+  const matches: Array<{
+    term: string;
+    definition: string;
+    category?: string;
+    positions: Array<{ start: number; end: number }>;
+  }> = [];
+
+  for (const term of allTerms) {
+    const positions: Array<{ start: number; end: number }> = [];
+
+    // 匹配主术语
+    let index = text.indexOf(term.term);
+    while (index !== -1) {
+      positions.push({
+        start: index,
+        end: index + term.term.length
+      });
+      index = text.indexOf(term.term, index + 1);
+    }
+
+    // 匹配同义词
+    if (term.synonyms && Array.isArray(term.synonyms)) {
+      for (const synonym of term.synonyms) {
+        let synIndex = text.indexOf(synonym);
+        while (synIndex !== -1) {
+          positions.push({
+            start: synIndex,
+            end: synIndex + synonym.length
+          });
+          synIndex = text.indexOf(synonym, synIndex + 1);
+        }
+      }
+    }
+
+    if (positions.length > 0) {
+      matches.push({
+        term: term.term,
+        definition: term.definition,
+        category: term.category,
+        positions
+      });
+
+      // 更新匹配计数
+      const stmt = db.prepare(`
+        UPDATE terms
+        SET matchCount = matchCount + ?,
+            lastMatched = ?
+        WHERE id = ?
+      `);
+      stmt.run(positions.length, new Date().toISOString(), term.id);
+    }
+  }
+
+  console.log('[Terms API] 匹配到术语数量:', matches.length);
+
+  res.json({
+    message: '匹配完成',
+    data: {
+      matchCount: matches.length,
+      matches
+    }
+  });
 }));
 
 export default router;

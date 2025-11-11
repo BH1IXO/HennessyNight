@@ -182,6 +182,9 @@ class SummaryManager {
         `;
 
         container.innerHTML = html;
+
+        // 🎯 为知识库术语附加tooltip
+        this.attachTermEvents();
     }
 
     /**
@@ -323,7 +326,47 @@ class SummaryManager {
      * 格式化文本（保留换行）
      */
     formatText(text) {
-        return this.escapeHtml(text).replace(/\n/g, '<br>');
+        return this.highlightKnowledgeTerms(this.escapeHtml(text)).replace(/\n/g, '<br>');
+    }
+
+    /**
+     * 🎯 高亮知识库术语 - 将[[术语]]标记转换为高亮HTML
+     */
+    highlightKnowledgeTerms(text) {
+        // 匹配 [[术语]] 格式的标记
+        return text.replace(/\[\[([^\]]+)\]\]/g, (match, term) => {
+            return `<span class="knowledge-term" data-term="${term}" title="点击查看术语详情">${term}</span>`;
+        });
+    }
+
+    /**
+     * 🎯 为高亮的知识库术语添加点击事件和tooltip
+     */
+    async attachTermEvents() {
+        const terms = document.querySelectorAll('.knowledge-term[data-term]');
+
+        for (const termElement of terms) {
+            const termName = termElement.dataset.term;
+
+            // 异步获取术语详情
+            try {
+                const response = await fetch(`${API_BASE_URL}/terms?search=${encodeURIComponent(termName)}`);
+                if (response.ok) {
+                    const result = await response.json();
+                    const termData = result.data.find(t => t.term === termName);
+
+                    if (termData) {
+                        termElement.title = `${termData.category ? `[${termData.category}] ` : ''}${termData.definition}`;
+                        termElement.dataset.definition = termData.definition;
+                        if (termData.category) {
+                            termElement.dataset.category = termData.category;
+                        }
+                    }
+                }
+            } catch (error) {
+                console.warn(`获取术语"${termName}"详情失败:`, error);
+            }
+        }
     }
 
     /**

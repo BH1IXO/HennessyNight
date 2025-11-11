@@ -1029,6 +1029,9 @@ class UIManager {
             finalSpan.className = 'final-text';
             finalSpan.textContent = text;
             contentDiv.appendChild(finalSpan);
+
+            // 🎯 异步匹配知识库术语并高亮
+            this.highlightKnowledgeTerms(finalSpan, text);
         }
 
         // 🎯 修复：如果创建了新消息块，检查上一个消息块是否只有临时文本
@@ -1158,6 +1161,102 @@ class UIManager {
                 });
                 this.scrollPending = false;
             });
+        }
+    }
+
+    /**
+     * 🎯 匹配知识库术语并高亮显示
+     */
+    async highlightKnowledgeTerms(textElement, text) {
+        try {
+            // 调用后端API匹配术语
+            const response = await fetch('/api/v1/terms/match-text', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text })
+            });
+
+            if (!response.ok) {
+                console.warn('知识库术语匹配失败:', response.status);
+                return;
+            }
+
+            const result = await response.json();
+            const matches = result.data.matches;
+
+            if (!matches || matches.length === 0) {
+                return;
+            }
+
+            console.log(`📚 匹配到 ${matches.length} 个知识库术语`);
+
+            // 按位置排序（从后往前，避免位置偏移）
+            const allPositions = [];
+            matches.forEach(match => {
+                match.positions.forEach(pos => {
+                    allPositions.push({
+                        start: pos.start,
+                        end: pos.end,
+                        term: match.term,
+                        definition: match.definition,
+                        category: match.category
+                    });
+                });
+            });
+
+            // 去重（同一位置可能被多次匹配）
+            const uniquePositions = [];
+            const positionSet = new Set();
+            allPositions.forEach(item => {
+                const key = `${item.start}-${item.end}`;
+                if (!positionSet.has(key)) {
+                    positionSet.add(key);
+                    uniquePositions.push(item);
+                }
+            });
+
+            // 从后往前排序，避免替换时位置偏移
+            uniquePositions.sort((a, b) => b.start - a.start);
+
+            // 高亮显示术语
+            let highlightedText = text;
+            uniquePositions.forEach(item => {
+                const before = highlightedText.substring(0, item.start);
+                const term = highlightedText.substring(item.start, item.end);
+                const after = highlightedText.substring(item.end);
+
+                // 创建高亮标记（使用特殊标记符，稍后替换为HTML）
+                highlightedText = before + `<<TERM::${term}::${item.definition}::${item.category || ''}>>` + after;
+            });
+
+            // 解析并创建HTML元素
+            const fragment = document.createDocumentFragment();
+            const parts = highlightedText.split(/<<TERM::|>>/);
+
+            for (let i = 0; i < parts.length; i++) {
+                if (parts[i].includes('::')) {
+                    // 这是一个术语
+                    const [term, definition, category] = parts[i].split('::');
+                    const termSpan = document.createElement('span');
+                    termSpan.className = 'knowledge-term';
+                    termSpan.textContent = term;
+                    termSpan.title = `${category ? `[${category}] ` : ''}${definition}`;
+                    termSpan.dataset.term = term;
+                    termSpan.dataset.definition = definition;
+                    if (category) termSpan.dataset.category = category;
+                    fragment.appendChild(termSpan);
+                } else if (parts[i]) {
+                    // 普通文本
+                    fragment.appendChild(document.createTextNode(parts[i]));
+                }
+            }
+
+            // 替换原始文本
+            textElement.textContent = '';
+            textElement.appendChild(fragment);
+
+        } catch (error) {
+            console.error('知识库术语高亮失败:', error);
         }
     }
 

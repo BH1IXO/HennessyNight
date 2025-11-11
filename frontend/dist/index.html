@@ -942,6 +942,23 @@
             color: var(--gray);
         }
 
+        /* 🎯 知识库术语高亮样式 */
+        .knowledge-term {
+            background: linear-gradient(120deg, #ffd89b 0%, #19547b 100%);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-weight: 600;
+            cursor: help;
+            border-bottom: 2px dotted #19547b;
+            position: relative;
+            padding: 0 2px;
+        }
+
+        .knowledge-term:hover {
+            filter: brightness(1.2);
+        }
+
         /* 说话人头像样式 */
         .speaker-avatar {
             width: 36px;
@@ -1204,7 +1221,12 @@
         <div class="main-content">
             <div class="left-panel">
                 <div class="card">
-                    <h2 class="card-title"><i class="fas fa-headphones"></i> 会议控制</h2>
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+                        <h2 class="card-title" style="margin-bottom: 0;"><i class="fas fa-headphones"></i> 会议控制</h2>
+                        <div id="interimTextDisplay" style="flex: 1; margin-left: 20px; padding: 8px 15px; background: #f5f5f5; border-radius: 6px; color: #999; font-style: italic; min-height: 36px; display: flex; align-items: center;">
+                            <span id="interimText">等待语音输入...</span>
+                        </div>
+                    </div>
 
                     <div class="control-panel" style="grid-template-columns: repeat(4, 1fr);">
                         <button class="btn" id="startRecording">
@@ -1517,7 +1539,7 @@
     <!-- 声纹匹配器 -->
     <script src="./voiceprint-matcher.js?v=20250203-6"></script>
     <!-- 实时语音识别应用 (包含声纹识别功能) -->
-    <script src="./realtime-speech-app.js?v=20250203-13"></script>
+    <script src="./realtime-speech-app.js?v=20250210-07"></script>
     <!-- 会议纪要生成模块 -->
     <script src="./meeting-app.js?v=12"></script>
     <!-- 知识库管理模块 -->

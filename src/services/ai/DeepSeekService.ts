@@ -231,6 +231,40 @@ export class DeepSeekService extends EventEmitter {
     } = options;
 
     try {
+      // 🎯 先调用知识库API匹配术语
+      let knowledgeTerms: Array<{ term: string; definition: string; category?: string }> = [];
+      try {
+        const { KnowledgeBaseDB } = await import('../../db/knowledgebase');
+        const allTerms = KnowledgeBaseDB.getAll(1000, 0);
+
+        // 匹配转录文本中的术语
+        allTerms.forEach(term => {
+          if (transcript.includes(term.term)) {
+            knowledgeTerms.push({
+              term: term.term,
+              definition: term.definition,
+              category: term.category
+            });
+          }
+          // 也匹配同义词
+          if (term.synonyms && Array.isArray(term.synonyms)) {
+            term.synonyms.forEach(synonym => {
+              if (transcript.includes(synonym)) {
+                knowledgeTerms.push({
+                  term: synonym,
+                  definition: term.definition,
+                  category: term.category
+                });
+              }
+            });
+          }
+        });
+
+        console.log(`📚 [DeepSeek] 在转录中匹配到 ${knowledgeTerms.length} 个知识库术语`);
+      } catch (error) {
+        console.warn('⚠️ [DeepSeek] 知识库术语匹配失败:', error);
+      }
+
       // 构建系统提示词
       const systemPrompt = this.buildSummarySystemPrompt(language, style);
 
@@ -243,7 +277,8 @@ export class DeepSeekService extends EventEmitter {
         meetingDate,  // 🎯 传递会议日期
         includeActionItems,
         includeSummary,
-        includeKeyPoints
+        includeKeyPoints,
+        knowledgeTerms  // 🎯 传递知识库术语
       });
 
       // 调用AI生成(优化参数以加快速度)
@@ -553,7 +588,12 @@ ${style === 'formal' ? '语言风格：正式、专业、客观' : '语言风格
 - 基于实际转录内容，不添加臆测
 - 突出关键信息和决策
 - 行动项要明确、可执行
-- 使用清晰的结构和格式`;
+- 使用清晰的结构和格式
+
+🎯 **知识库术语标注**：
+- 如果用户提供了知识库术语列表，在生成纪要时，对出现的知识库术语使用特殊标记：[[术语名称]]
+- 标记后的术语将在前端高亮显示，并显示其定义
+- 只标记确实出现在转录中的术语，不要额外添加`;
     } else {
       return `You are a professional meeting recorder and analyst. Your task is to organize meeting transcripts into structured meeting minutes.
 
@@ -587,6 +627,7 @@ Important principles:
     includeActionItems?: boolean;
     includeSummary?: boolean;
     includeKeyPoints?: boolean;
+    knowledgeTerms?: Array<{ term: string; definition: string; category?: string }>;  // 🎯 新增知识库术语
   }): string {
     const {
       transcript,
@@ -596,7 +637,8 @@ Important principles:
       meetingDate,
       includeActionItems = true,
       includeSummary = true,
-      includeKeyPoints = true
+      includeKeyPoints = true,
+      knowledgeTerms = []
     } = options;
 
     let prompt = `请为以下会议生成纪要：\n\n`;
@@ -623,12 +665,22 @@ Important principles:
     }
     prompt += `\n`;
 
+    // 🎯 如果有知识库术语，添加到提示中
+    if (knowledgeTerms.length > 0) {
+      prompt += `**知识库术语（请在生成的纪要中用[[术语]]标记这些术语）：**\n`;
+      knowledgeTerms.forEach(term => {
+        prompt += `- ${term.term}${term.category ? ` [${term.category}]` : ''}: ${term.definition}\n`;
+      });
+      prompt += `\n`;
+    }
+
     prompt += `**会议转录（已按说话人格式化）：**\n${transcript}\n\n`;
 
     prompt += `**要求：**\n`;
     if (includeSummary) prompt += `- 生成会议摘要\n`;
     if (includeKeyPoints) prompt += `- 提取关键讨论点\n`;
     if (includeActionItems) prompt += `- 提取行动项（包含负责人和截止日期）\n`;
+    if (knowledgeTerms.length > 0) prompt += `- 在纪要中用[[术语]]标记所有出现的知识库术语\n`;
 
     return prompt;
   }
