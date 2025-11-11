@@ -1420,29 +1420,31 @@
 
                             <div class="tab-pane" id="email-tab">
                                 <div class="email-form">
-                                    <div class="form-group" style="margin-bottom: 15px;">
-                                        <label class="form-label" style="margin-bottom: 5px; font-size: 0.9rem;">
+                                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+                                        <label class="form-label" style="margin: 0; font-size: 0.9rem; white-space: nowrap; min-width: 70px;">
                                             <i class="fas fa-users"></i> 收件人 <span style="color: var(--accent);">*</span>
                                         </label>
-                                        <input type="text" class="form-input" id="emailRecipients" placeholder="多个邮箱用逗号分隔" style="padding: 8px 12px; font-size: 0.9rem;">
-                                        <small style="color: var(--gray); font-size: 0.75rem; display: block; margin-top: 3px;">
-                                            <i class="fas fa-info-circle"></i> 自动提取参会人邮箱
-                                        </small>
+                                        <div style="flex: 1;">
+                                            <input type="text" class="form-input" id="emailRecipients" placeholder="多个邮箱用逗号分隔" style="padding: 8px 12px; font-size: 0.9rem; width: 100%;">
+                                            <small style="color: var(--gray); font-size: 0.75rem; display: block; margin-top: 3px; margin-left: 2px;">
+                                                <i class="fas fa-info-circle"></i> 自动提取参会人邮箱
+                                            </small>
+                                        </div>
                                     </div>
 
-                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px;">
-                                        <div style="margin-bottom: 0;">
-                                            <label class="form-label" style="margin-bottom: 5px; font-size: 0.85rem;">
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <label class="form-label" style="margin: 0; font-size: 0.85rem; white-space: nowrap; min-width: 50px;">
                                                 <i class="fas fa-user-friends"></i> 抄送
                                             </label>
-                                            <input type="text" class="form-input" id="emailCC" placeholder="选填" style="padding: 8px 10px; font-size: 0.85rem;">
+                                            <input type="text" class="form-input" id="emailCC" placeholder="选填" style="padding: 8px 10px; font-size: 0.85rem; flex: 1;">
                                         </div>
 
-                                        <div style="margin-bottom: 0;">
-                                            <label class="form-label" style="margin-bottom: 5px; font-size: 0.85rem;">
+                                        <div style="display: flex; align-items: center; gap: 8px;">
+                                            <label class="form-label" style="margin: 0; font-size: 0.85rem; white-space: nowrap; min-width: 50px;">
                                                 <i class="fas fa-user-secret"></i> 密送
                                             </label>
-                                            <input type="text" class="form-input" id="emailBCC" placeholder="选填" style="padding: 8px 10px; font-size: 0.85rem;">
+                                            <input type="text" class="form-input" id="emailBCC" placeholder="选填" style="padding: 8px 10px; font-size: 0.85rem; flex: 1;">
                                         </div>
                                     </div>
 
