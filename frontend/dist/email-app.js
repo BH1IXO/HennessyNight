@@ -63,22 +63,22 @@ class EmailApp {
      * 监听会议纪要更新
      */
     listenForSummaryUpdates() {
-        console.log('📧 [Email] 开始监听会议纪要更新');
+        // console.log('📧 [Email] 开始监听会议纪要更新');
 
         // 监听全局的 summaryManager 更新
         const checkSummary = () => {
-            console.log('📧 [Email] 检查 summaryManager:', {
-                hasSummaryManager: !!window.summaryManager,
-                hasCurrentSummary: !!(window.summaryManager && window.summaryManager.currentSummary),
-                currentSummary: window.summaryManager?.currentSummary
-            });
+            // console.log('📧 [Email] 检查 summaryManager:', {
+            //     hasSummaryManager: !!window.summaryManager,
+            //     hasCurrentSummary: !!(window.summaryManager && window.summaryManager.currentSummary),
+            //     currentSummary: window.summaryManager?.currentSummary
+            // });
 
             if (window.summaryManager && window.summaryManager.currentSummary) {
-                console.log('📧 [Email] 发现会议纪要,准备更新邮件内容');
+                // console.log('📧 [Email] 发现会议纪要,准备更新邮件内容');
                 this.currentSummary = window.summaryManager.currentSummary;
                 this.updateEmailContent();
             } else {
-                console.log('📧 [Email] 尚未发现会议纪要');
+                // console.log('📧 [Email] 尚未发现会议纪要');
             }
         };
 
@@ -90,35 +90,62 @@ class EmailApp {
     }
 
     /**
-     * 从声纹库获取参会人员邮箱
+     * 🎯 从实时语音识别获取参会人员（包含邮箱）
      */
-    async getAttendeesFromVoiceprint() {
+    async getAttendeesWithEmails() {
         try {
-            // 从 localStorage 获取声纹数据
-            const voiceprintsData = localStorage.getItem('voiceprints');
-            if (!voiceprintsData) {
-                console.log('📧 没有找到声纹数据');
-                return [];
+            let attendees = [];
+
+            // 🎯 方法1：从 realtimeApp.speechManager 获取识别出的说话人
+            if (window.realtimeApp && window.realtimeApp.speechManager) {
+                const identifiedSpeakers = window.realtimeApp.speechManager.getIdentifiedSpeakers();
+                console.log('📧 从实时识别获取到参会人员:', identifiedSpeakers);
+
+                // 这些参会人员已经包含了邮箱信息（从服务器声纹数据获取）
+                attendees = identifiedSpeakers.map(speaker => ({
+                    name: speaker.name,
+                    email: speaker.email || null
+                }));
             }
 
-            const voiceprints = JSON.parse(voiceprintsData);
-            const attendees = [];
+            // 🎯 方法2：如果没有实时识别数据，尝试从会议纪要中提取
+            if (attendees.length === 0 && this.currentSummary && this.currentSummary.attendees) {
+                const summaryAttendees = this.currentSummary.attendees;
 
-            // 提取所有声纹的邮箱
-            for (const [name, data] of Object.entries(voiceprints)) {
-                if (data.email) {
-                    attendees.push({
+                // 尝试从服务器获取声纹数据来匹配邮箱
+                const serverSpeakers = await this.fetchServerSpeakers();
+
+                attendees = summaryAttendees.map(name => {
+                    const speaker = serverSpeakers.find(s => s.name === name);
+                    return {
                         name: name,
-                        email: data.email
-                    });
-                }
+                        email: speaker ? speaker.email : null
+                    };
+                });
             }
 
-            console.log(`📧 从声纹库获取到 ${attendees.length} 个参会人员`, attendees);
+            console.log(`📧 获取到 ${attendees.length} 个参会人员（含邮箱）:`, attendees);
             return attendees;
 
         } catch (error) {
             console.error('❌ 获取参会人员失败:', error);
+            return [];
+        }
+    }
+
+    /**
+     * 🎯 从服务器获取声纹数据
+     */
+    async fetchServerSpeakers() {
+        try {
+            const response = await fetch('/api/v1/speakers');
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            const result = await response.json();
+            return result.data || [];
+        } catch (error) {
+            console.error('❌ 获取服务器声纹数据失败:', error);
             return [];
         }
     }
@@ -155,41 +182,17 @@ class EmailApp {
     }
 
     /**
-     * 更新邮件内容（标题、收件人、预览）
+     * 🎯 更新邮件内容（标题、收件人、预览）
      */
     async updateEmailContent() {
-        console.log('📧 [Email] updateEmailContent 被调用');
-        console.log('📧 [Email] this.currentSummary:', this.currentSummary);
-
         if (!this.currentSummary) {
-            console.log('📧 [Email] 没有会议纪要，跳过更新');
             return;
         }
 
-        console.log('📧 [Email] 开始更新邮件内容,会议纪要:', this.currentSummary);
+        console.log('📧 开始更新邮件内容,会议纪要:', this.currentSummary);
 
-        // 获取参会人员
-        const voiceprintAttendees = await this.getAttendeesFromVoiceprint();
-        const summaryAttendees = this.extractAttendeesFromSummary(this.currentSummary);
-
-        // 合并参会人员（优先使用声纹库的邮箱）
-        const attendeesMap = new Map();
-
-        // 先添加纪要中的参会人员
-        summaryAttendees.forEach(attendee => {
-            attendeesMap.set(attendee.name, attendee);
-        });
-
-        // 用声纹库的数据更新邮箱
-        voiceprintAttendees.forEach(attendee => {
-            if (attendeesMap.has(attendee.name)) {
-                attendeesMap.get(attendee.name).email = attendee.email;
-            } else {
-                attendeesMap.set(attendee.name, attendee);
-            }
-        });
-
-        this.attendees = Array.from(attendeesMap.values());
+        // 🎯 从实时识别获取参会人员（已包含邮箱）
+        this.attendees = await this.getAttendeesWithEmails();
 
         // 更新收件人输入框
         this.updateRecipientsInput();
@@ -221,25 +224,44 @@ class EmailApp {
     }
 
     /**
-     * 更新邮件标题
+     * 🎯 更新邮件标题（从会议纪要提取标题，添加时间）
      */
     updateEmailSubject() {
         const subjectInput = document.getElementById('emailSubject');
         if (!subjectInput || subjectInput.value.trim()) return; // 如果用户已填写，不覆盖
 
         const summary = this.currentSummary;
-        let subject = '会议纪要';
+        let title = '会议纪要';
 
-        // 从 summary 中获取标题
+        // 🎯 从 summary 中提取会议标题
         if (summary.title) {
-            subject = summary.title;
+            title = summary.title;
         } else if (summary.metadata && summary.metadata.title) {
-            subject = summary.metadata.title;
+            title = summary.metadata.title;
         }
 
-        // 添加日期
-        const date = summary.meetingDate || summary.date || new Date().toLocaleDateString('zh-CN');
-        subject = `${subject} - ${date}`;
+        // 🎯 获取会议日期和时间
+        let dateTimeStr = '';
+        if (summary.date) {
+            dateTimeStr = summary.date;  // 已经是格式化后的日期字符串
+        } else if (summary.meetingDate) {
+            // 如果是Date对象，格式化为包含时间的字符串
+            const date = summary.meetingDate instanceof Date
+                ? summary.meetingDate
+                : new Date(summary.meetingDate);
+            dateTimeStr = date.toLocaleString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        } else {
+            dateTimeStr = new Date().toLocaleDateString('zh-CN');
+        }
+
+        // 🎯 组合标题：会议标题 - 日期时间
+        const subject = `${title} - ${dateTimeStr}`;
 
         subjectInput.value = subject;
         console.log(`📧 自动填充邮件标题: ${subject}`);
@@ -249,20 +271,20 @@ class EmailApp {
      * 更新邮件内容预览
      */
     updateEmailPreview() {
-        console.log('📧 [Email] updateEmailPreview 被调用');
+        // console.log('📧 [Email] updateEmailPreview 被调用');
         const previewBox = document.getElementById('emailContentPreview');
-        console.log('📧 [Email] previewBox 元素:', previewBox);
+        // console.log('📧 [Email] previewBox 元素:', previewBox);
 
         if (!previewBox) {
-            console.error('📧 [Email] 找不到 emailContentPreview 元素!');
+            // console.error('📧 [Email] 找不到 emailContentPreview 元素!');
             return;
         }
 
         const summary = this.currentSummary;
-        console.log('📧 [Email] 当前会议纪要:', summary);
+        // console.log('📧 [Email] 当前会议纪要:', summary);
 
         if (!summary) {
-            console.log('📧 [Email] 没有会议纪要,显示空状态');
+            // console.log('📧 [Email] 没有会议纪要,显示空状态');
             previewBox.innerHTML = `
                 <div class="empty-state">
                     <i class="fas fa-inbox"></i>
@@ -273,12 +295,12 @@ class EmailApp {
         }
 
         // 构建邮件HTML内容
-        console.log('📧 [Email] 开始构建邮件HTML');
+        // console.log('📧 [Email] 开始构建邮件HTML');
         const emailHTML = this.buildEmailHTML(summary);
-        console.log('📧 [Email] 邮件HTML长度:', emailHTML.length);
+        // console.log('📧 [Email] 邮件HTML长度:', emailHTML.length);
         previewBox.innerHTML = emailHTML;
 
-        console.log('📧 [Email] ✅ 邮件预览已更新成功!');
+        // console.log('📧 [Email] ✅ 邮件预览已更新成功!');
     }
 
     /**
