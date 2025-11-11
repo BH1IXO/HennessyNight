@@ -111,14 +111,15 @@ class SummaryManager {
         // 构建美观的HTML
         const html = `
             <div class="summary-content">
-                <div class="summary-header">
-                    <h2 style="margin: 0 0 10px 0; color: var(--primary);">
-                        <i class="fas fa-file-alt"></i> 会议纪要
-                    </h2>
-                    <div style="color: #666; font-size: 14px;">
-                        <i class="fas fa-clock"></i> 生成时间: ${this.formatDateTime(new Date())}
+                <div>
+                    <div class="summary-header">
+                        <h2>
+                            <i class="fas fa-file-alt"></i> 会议纪要
+                        </h2>
+                        <div style="color: #718096; font-size: 14px;">
+                            <i class="fas fa-clock"></i> 生成时间: ${this.formatDateTime(new Date())}
+                        </div>
                     </div>
-                </div>
 
                 ${summary.title ? `
                     <div class="summary-section">
@@ -170,13 +171,14 @@ class SummaryManager {
                     </div>
                 ` : ''}
 
-                <div class="summary-footer">
-                    <button class="btn btn-info" onclick="summaryManager.copySummary()">
-                        <i class="fas fa-copy"></i> 复制纪要
-                    </button>
-                    <button class="btn btn-success" onclick="summaryManager.exportSummary()">
-                        <i class="fas fa-download"></i> 导出纪要
-                    </button>
+                    <div class="summary-footer">
+                        <button class="btn btn-info" onclick="summaryManager.copySummary()">
+                            <i class="fas fa-copy"></i> 复制纪要
+                        </button>
+                        <button class="btn btn-success" onclick="summaryManager.exportSummary()">
+                            <i class="fas fa-download"></i> 导出纪要
+                        </button>
+                    </div>
                 </div>
             </div>
         `;
