@@ -604,14 +604,22 @@ window.addEventListener('DOMContentLoaded', () => {
                     window.realtimeApp.speechManager.stopRecording();
                 }
 
-                // 延迟执行自动生成纪要，等待录音停止完成
-                setTimeout(() => {
-                    console.log('🔄 停止录音完成，自动生成会议纪要...');
-                    autoGenerateSummaryFromRecording();
-                }, 800);
+                // 🎯 不再使用固定延迟，而是等待 identification:completed 事件
+                console.log('⏸️ 等待所有声纹识别任务完成后再生成会议纪要...');
             });
 
-            console.log('✅ 停止录音按钮事件已重新绑定（停止后自动生成纪要）');
+            console.log('✅ 停止录音按钮事件已重新绑定（等待识别完成后自动生成纪要）');
+        }
+
+        // 🎯 监听识别完成事件，自动生成会议纪要
+        if (window.eventBus) {
+            window.eventBus.on('identification:completed', () => {
+                console.log('✅ 所有识别任务已完成，自动生成会议纪要...');
+                autoGenerateSummaryFromRecording();
+            });
+            console.log('✅ 已绑定 identification:completed 事件监听器');
+        } else {
+            console.warn('⚠️ window.eventBus 不可用，无法监听识别完成事件');
         }
 
         // 绑定生成纪要按钮

@@ -56,6 +56,7 @@ class RealtimeSpeechManager {
         this.consecutiveSameSpeaker = 0; // 连续识别到相同说话人的次数
         this.lastSentenceTime = Date.now(); // 上次断句时间
         this.identifiedSpeakers = new Map(); // 🎯 记录所有识别出的说话人 {name: {name, email, count}}
+        this.needRestartAfterStop = false; // 🎯 说话人切换时需要重启识别器的标志
 
         this.initRecognition();
     }
@@ -84,11 +85,20 @@ class RealtimeSpeechManager {
         // 自动重启
         this.recognition.onend = () => {
             if (this.isRecording) {
+                // 🎯 检查是否因为说话人切换而需要重启
+                if (this.needRestartAfterStop) {
+                    console.log('✅ 识别器已停止，准备重启以适应新说话人...');
+                    this.needRestartAfterStop = false;
+                }
+
                 setTimeout(() => {
                     try {
-                        this.recognition.start();
+                        if (this.isRecording) {
+                            this.recognition.start();
+                            console.log('✅ 语音识别已重启');
+                        }
                     } catch (e) {
-                        console.error('重启识别失败:', e);
+                        console.error('❌ 重启识别失败:', e);
                     }
                 }, 100);
             }
@@ -601,15 +611,14 @@ class RealtimeSpeechManager {
                             if (this.isRecording && this.recognition) {
                                 console.log('🔄 说话人切换，重启浏览器语音识别以适应新声音...');
                                 try {
+                                    // 🎯 设置一个标志，表示需要在停止后重启
+                                    this.needRestartAfterStop = true;
+
+                                    // 停止识别器（会触发 onend 事件）
                                     this.recognition.stop();
-                                    setTimeout(() => {
-                                        if (this.isRecording) {
-                                            this.recognition.start();
-                                            console.log('✅ 语音识别已重启，可识别新说话人');
-                                        }
-                                    }, 200);
                                 } catch (e) {
-                                    console.error('❌ 重启识别失败:', e);
+                                    console.error('❌ 停止识别失败:', e);
+                                    this.needRestartAfterStop = false;
                                 }
                             }
                         } else {
@@ -956,6 +965,9 @@ class UIManager {
         const container = document.getElementById('transcriptDisplay');
         if (!container) return;
 
+        // 🎯 保存当前消息块的引用，用于后续判断是否需要删除
+        const previousMessageElement = this.currentMessageElement;
+
         // 判断是否需要新建消息块（超过3秒间隔或说话人变化）
         const timeSinceLastMessage = timestamp - this.lastMessageTime;
         const needNewBlock = !this.lastSpeaker ||
@@ -980,6 +992,21 @@ class UIManager {
             finalSpan.className = 'final-text';
             finalSpan.textContent = text;
             contentDiv.appendChild(finalSpan);
+        }
+
+        // 🎯 修复：如果创建了新消息块，检查上一个消息块是否只有临时文本
+        if (needNewBlock && previousMessageElement && previousMessageElement !== this.currentMessageElement) {
+            const prevContentDiv = previousMessageElement.querySelector('.message-content');
+            if (prevContentDiv) {
+                const prevInterim = prevContentDiv.querySelector('.interim-text');
+                const prevFinal = prevContentDiv.querySelector('.final-text');
+
+                // 如果上一个消息块只有临时文本，没有最终文本，则删除它
+                if (prevInterim && !prevFinal) {
+                    console.log('🗑️ 删除只包含临时文本的旧消息块');
+                    previousMessageElement.remove();
+                }
+            }
         }
 
         this.lastMessageTime = timestamp;
@@ -1016,23 +1043,8 @@ class UIManager {
 
         console.log(`📝 创建新消息块 [ID:${timestamp}] - 说话人: ${speakerName}`);
 
-        // 🎯 如果是"识别中"状态,设置30秒超时自动更新为"未识别"
-        if (isIdentifying) {
-            console.log(`⏱️ 设置识别超时检测 [ID:${timestamp}] - 30秒超时`);
-            setTimeout(() => {
-                const elem = container.querySelector(`[data-message-id="${timestamp}"]`);
-                if (elem) {
-                    const avatar = elem.querySelector('.speaker-avatar');
-                    if (avatar && avatar.classList.contains('identifying')) {
-                        console.warn(`⏱️ 识别超时 [ID:${timestamp}],更新为"未识别"`);
-                        this.updateSpeakerIdentification({
-                            messageId: timestamp,
-                            speaker: { name: '未识别', confidence: 0, identifying: false }
-                        });
-                    }
-                }
-            }, 30000); // 30秒超时
-        }
+        // 🎯 不再设置超时自动更新为"未识别"，保持"识别中"状态直到声纹识别完成
+        // 只有当声纹识别完成且没有匹配时，才会显示"未识别"
 
         // 动画
         requestAnimationFrame(() => {
@@ -1925,6 +1937,10 @@ class RealtimeApp {
         this.speechManager = new RealtimeSpeechManager(this.eventBus);
         this.uiManager = new UIManager(this.eventBus, this.speechManager);
         this.voiceprintManager = new VoiceprintManager(this.eventBus);
+
+        // 🎯 暴露 eventBus 到全局，供 meeting-app.js 使用
+        window.eventBus = this.eventBus;
+        console.log('✅ window.eventBus 已暴露到全局');
 
         // 初始化全局声纹对象
         this.initGlobalVoiceprintObjects();
