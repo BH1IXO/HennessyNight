@@ -333,7 +333,7 @@ class SummaryManager {
     }
 
     /**
-     * 🎯 渲染Markdown为HTML
+     * 🎯 渲染Markdown为HTML（完整转换，不留任何Markdown符号）
      */
     renderMarkdown(text) {
         let html = text;
@@ -341,31 +341,79 @@ class SummaryManager {
         // 1. 先处理知识库术语标记 [[术语]]
         html = this.highlightKnowledgeTerms(html);
 
-        // 2. 处理标题 (### 标题)
-        html = html.replace(/^### (.+)$/gm, '<h4 style="color: #667eea; font-size: 16px; font-weight: 600; margin: 15px 0 10px 0;">$1</h4>');
-        html = html.replace(/^## (.+)$/gm, '<h3 style="color: #667eea; font-size: 18px; font-weight: 600; margin: 18px 0 12px 0;">$1</h3>');
-        html = html.replace(/^# (.+)$/gm, '<h2 style="color: #667eea; font-size: 20px; font-weight: 700; margin: 20px 0 15px 0;">$1</h2>');
+        // 2. 处理表格（必须在其他转换之前）
+        html = this.renderMarkdownTable(html);
 
-        // 3. 处理粗体 **文本**
+        // 3. 处理代码块（三个反引号）- 必须在单行代码之前处理
+        html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre style="background: #f7fafc; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 10px 0;"><code style="color: #2d3748; font-family: monospace; font-size: 0.9em;">$2</code></pre>');
+
+        // 4. 处理标题（从大到小，避免误匹配）
+        html = html.replace(/^#### (.+)$/gm, '<h5 style="color: #667eea; font-size: 14px; font-weight: 600; margin: 8px 0 6px 0; line-height: 1.4;">$1</h5>');
+        html = html.replace(/^### (.+)$/gm, '<h4 style="color: #667eea; font-size: 16px; font-weight: 600; margin: 10px 0 6px 0; line-height: 1.4;">$1</h4>');
+        html = html.replace(/^## (.+)$/gm, '<h3 style="color: #667eea; font-size: 18px; font-weight: 600; margin: 12px 0 8px 0; line-height: 1.4;">$1</h3>');
+        html = html.replace(/^# (.+)$/gm, '<h2 style="color: #667eea; font-size: 20px; font-weight: 700; margin: 15px 0 10px 0; line-height: 1.4;">$1</h2>');
+
+        // 5. 处理粗体 **文本** 和 __文本__（必须在斜体之前）
         html = html.replace(/\*\*(.+?)\*\*/g, '<strong style="color: #2d3748; font-weight: 600;">$1</strong>');
+        html = html.replace(/__(.+?)__/g, '<strong style="color: #2d3748; font-weight: 600;">$1</strong>');
 
-        // 4. 处理斜体 *文本*
-        html = html.replace(/\*(.+?)\*/g, '<em style="color: #4a5568;">$1</em>');
+        // 6. 处理斜体 *文本* 和 _文本_
+        html = html.replace(/\*([^*]+?)\*/g, '<em style="color: #4a5568;">$1</em>');
+        html = html.replace(/_([^_]+?)_/g, '<em style="color: #4a5568;">$1</em>');
 
-        // 5. 处理列表项 - 文本
-        html = html.replace(/^- (.+)$/gm, '<div style="padding-left: 20px; margin: 8px 0; position: relative;"><span style="position: absolute; left: 0; color: #667eea;">•</span> $1</div>');
+        // 7. 处理删除线 ~~文本~~
+        html = html.replace(/~~(.+?)~~/g, '<del style="color: #a0aec0;">$1</del>');
 
-        // 6. 处理链接 [文本](URL)
+        // 8. 处理有序列表 1. 文本
+        html = html.replace(/^\d+\.\s+(.+)$/gm, '<div style="padding-left: 20px; margin: 4px 0; position: relative; line-height: 1.6;"><span style="position: absolute; left: 0; color: #667eea; font-weight: 600;">•</span> $1</div>');
+
+        // 9. 处理无序列表 - 文本 或 * 文本
+        html = html.replace(/^[\-\*]\s+(.+)$/gm, '<div style="padding-left: 20px; margin: 4px 0; position: relative; line-height: 1.6;"><span style="position: absolute; left: 0; color: #667eea;">•</span> $1</div>');
+
+        // 10. 处理链接 [文本](URL)
         html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color: #667eea; text-decoration: underline;" target="_blank">$1</a>');
 
-        // 7. 处理代码块 `代码`
+        // 11. 处理单行代码 `代码`
         html = html.replace(/`([^`]+)`/g, '<code style="background: #f7fafc; padding: 2px 6px; border-radius: 4px; color: #e53e3e; font-family: monospace; font-size: 0.9em;">$1</code>');
 
-        // 8. 处理换行
-        html = html.replace(/\n\n/g, '<br><br>');
+        // 12. 处理引用 > 文本
+        html = html.replace(/^>\s+(.+)$/gm, '<blockquote style="border-left: 4px solid #667eea; padding-left: 12px; margin: 8px 0; color: #4a5568; font-style: italic;">$1</blockquote>');
+
+        // 13. 处理水平线 --- 或 ***
+        html = html.replace(/^(\-\-\-|\*\*\*)$/gm, '<hr style="border: none; border-top: 2px solid #e2e8f0; margin: 15px 0;">');
+
+        // 14. 处理换行（减小行距）
+        html = html.replace(/\n\n/g, '<br style="line-height: 0.5;">');
         html = html.replace(/\n/g, '<br>');
 
         return html;
+    }
+
+    /**
+     * 🎯 渲染Markdown表格为HTML表格
+     */
+    renderMarkdownTable(text) {
+        // 匹配Markdown表格格式
+        const tableRegex = /^\|(.+)\|\n\|[\s\-:|]+\|\n((?:\|.+\|\n?)+)/gm;
+
+        return text.replace(tableRegex, (match, header, rows) => {
+            // 处理表头
+            const headers = header.split('|').map(h => h.trim()).filter(h => h);
+            const headerHtml = headers.map(h => `<th style="padding: 8px 12px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: 600; border: 1px solid #e2e8f0;">${h}</th>`).join('');
+
+            // 处理表格行
+            const rowsArray = rows.trim().split('\n');
+            const rowsHtml = rowsArray.map(row => {
+                const cells = row.split('|').map(c => c.trim()).filter(c => c);
+                const cellsHtml = cells.map(c => `<td style="padding: 8px 12px; border: 1px solid #e2e8f0; line-height: 1.5;">${c}</td>`).join('');
+                return `<tr>${cellsHtml}</tr>`;
+            }).join('');
+
+            return `<table style="border-collapse: collapse; width: 100%; margin: 15px 0; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden;">
+                <thead><tr>${headerHtml}</tr></thead>
+                <tbody>${rowsHtml}</tbody>
+            </table>`;
+        });
     }
 
     /**

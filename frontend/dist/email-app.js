@@ -228,6 +228,52 @@ class EmailApp {
     }
 
     /**
+     * 🎯 移除文本中的所有Markdown符号（用于纯文本场景如邮件标题）
+     */
+    stripMarkdown(text) {
+        if (!text) return '';
+        let stripped = text;
+
+        // 移除知识库术语标记
+        stripped = stripped.replace(/\[\[([^\]]+)\]\]/g, '$1');
+
+        // 移除代码块
+        stripped = stripped.replace(/```[\s\S]*?```/g, '');
+
+        // 移除标题符号
+        stripped = stripped.replace(/^#{1,6}\s+/gm, '');
+
+        // 移除粗体
+        stripped = stripped.replace(/\*\*(.+?)\*\*/g, '$1');
+        stripped = stripped.replace(/__(.+?)__/g, '$1');
+
+        // 移除斜体
+        stripped = stripped.replace(/\*([^*]+?)\*/g, '$1');
+        stripped = stripped.replace(/_([^_]+?)_/g, '$1');
+
+        // 移除删除线
+        stripped = stripped.replace(/~~(.+?)~~/g, '$1');
+
+        // 移除列表标记
+        stripped = stripped.replace(/^\d+\.\s+/gm, '');
+        stripped = stripped.replace(/^[\-\*]\s+/gm, '');
+
+        // 移除链接，保留文本
+        stripped = stripped.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+
+        // 移除代码标记
+        stripped = stripped.replace(/`([^`]+)`/g, '$1');
+
+        // 移除引用标记
+        stripped = stripped.replace(/^>\s+/gm, '');
+
+        // 移除水平线
+        stripped = stripped.replace(/^(\-\-\-|\*\*\*)$/gm, '');
+
+        return stripped.trim();
+    }
+
+    /**
      * 🎯 更新邮件标题（从会议纪要提取标题，添加时间）
      */
     updateEmailSubject() {
@@ -237,11 +283,11 @@ class EmailApp {
         const summary = this.currentSummary;
         let title = '会议纪要';
 
-        // 🎯 从 summary 中提取会议标题
+        // 🎯 从 summary 中提取会议标题（去除Markdown符号）
         if (summary.title) {
-            title = summary.title;
+            title = this.stripMarkdown(summary.title);
         } else if (summary.metadata && summary.metadata.title) {
-            title = summary.metadata.title;
+            title = this.stripMarkdown(summary.metadata.title);
         }
 
         // 🎯 获取会议日期和时间
@@ -308,16 +354,103 @@ class EmailApp {
     }
 
     /**
+     * 🎯 渲染Markdown为HTML（与meeting-app保持一致）
+     */
+    renderMarkdown(text) {
+        if (!text) return '';
+        let html = text;
+
+        // 1. 处理知识库术语标记 [[术语]]
+        html = html.replace(/\[\[([^\]]+)\]\]/g, (match, term) => {
+            return `<span style="background: linear-gradient(120deg, #ffd89b 0%, #19547b 100%); background-clip: text; -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-weight: 600; border-bottom: 2px dotted #19547b;" title="${term}">${term}</span>`;
+        });
+
+        // 2. 处理表格
+        html = this.renderMarkdownTable(html);
+
+        // 3. 处理代码块
+        html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre style="background: #f7fafc; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 10px 0;"><code style="color: #2d3748; font-family: monospace; font-size: 0.9em;">$2</code></pre>');
+
+        // 4. 处理标题
+        html = html.replace(/^#### (.+)$/gm, '<h5 style="color: #4361ee; font-size: 14px; font-weight: 600; margin: 8px 0 6px 0;">$1</h5>');
+        html = html.replace(/^### (.+)$/gm, '<h4 style="color: #4361ee; font-size: 16px; font-weight: 600; margin: 10px 0 6px 0;">$1</h4>');
+        html = html.replace(/^## (.+)$/gm, '<h3 style="color: #4361ee; font-size: 18px; font-weight: 600; margin: 12px 0 8px 0;">$1</h3>');
+        html = html.replace(/^# (.+)$/gm, '<h2 style="color: #4361ee; font-size: 20px; font-weight: 700; margin: 15px 0 10px 0;">$1</h2>');
+
+        // 5. 处理粗体
+        html = html.replace(/\*\*(.+?)\*\*/g, '<strong style="font-weight: 600;">$1</strong>');
+        html = html.replace(/__(.+?)__/g, '<strong style="font-weight: 600;">$1</strong>');
+
+        // 6. 处理斜体
+        html = html.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
+        html = html.replace(/_([^_]+?)_/g, '<em>$1</em>');
+
+        // 7. 处理删除线
+        html = html.replace(/~~(.+?)~~/g, '<del style="color: #a0aec0;">$1</del>');
+
+        // 8. 处理有序列表
+        html = html.replace(/^\d+\.\s+(.+)$/gm, '<div style="padding-left: 20px; margin: 4px 0; position: relative;"><span style="position: absolute; left: 0; color: #4361ee; font-weight: 600;">•</span> $1</div>');
+
+        // 9. 处理无序列表
+        html = html.replace(/^[\-\*]\s+(.+)$/gm, '<div style="padding-left: 20px; margin: 4px 0; position: relative;"><span style="position: absolute; left: 0; color: #4361ee;">•</span> $1</div>');
+
+        // 10. 处理链接
+        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color: #4361ee; text-decoration: underline;" target="_blank">$1</a>');
+
+        // 11. 处理单行代码
+        html = html.replace(/`([^`]+)`/g, '<code style="background: #f7fafc; padding: 2px 6px; border-radius: 4px; color: #e53e3e; font-family: monospace; font-size: 0.9em;">$1</code>');
+
+        // 12. 处理引用
+        html = html.replace(/^>\s+(.+)$/gm, '<blockquote style="border-left: 4px solid #4361ee; padding-left: 12px; margin: 8px 0; color: #4a5568; font-style: italic;">$1</blockquote>');
+
+        // 13. 处理水平线
+        html = html.replace(/^(\-\-\-|\*\*\*)$/gm, '<hr style="border: none; border-top: 2px solid #e2e8f0; margin: 15px 0;">');
+
+        // 14. 处理换行
+        html = html.replace(/\n\n/g, '<br>');
+        html = html.replace(/\n/g, '<br>');
+
+        return html;
+    }
+
+    /**
+     * 🎯 渲染Markdown表格为HTML表格
+     */
+    renderMarkdownTable(text) {
+        const tableRegex = /^\|(.+)\|\n\|[\s\-:|]+\|\n((?:\|.+\|\n?)+)/gm;
+
+        return text.replace(tableRegex, (match, header, rows) => {
+            const headers = header.split('|').map(h => h.trim()).filter(h => h);
+            const headerHtml = headers.map(h => `<th style="padding: 8px 12px; background: linear-gradient(135deg, #4361ee 0%, #6c63ff 100%); color: white; font-weight: 600; border: 1px solid #e2e8f0;">${h}</th>`).join('');
+
+            const rowsArray = rows.trim().split('\n');
+            const rowsHtml = rowsArray.map(row => {
+                const cells = row.split('|').map(c => c.trim()).filter(c => c);
+                const cellsHtml = cells.map(c => `<td style="padding: 8px 12px; border: 1px solid #e2e8f0;">${c}</td>`).join('');
+                return `<tr>${cellsHtml}</tr>`;
+            }).join('');
+
+            return `<table style="border-collapse: collapse; width: 100%; margin: 15px 0; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden;">
+                <thead><tr>${headerHtml}</tr></thead>
+                <tbody>${rowsHtml}</tbody>
+            </table>`;
+        });
+    }
+
+    /**
      * 构建邮件HTML内容
      */
     buildEmailHTML(summary) {
         const date = summary.meetingDate || summary.date || new Date().toLocaleDateString('zh-CN');
 
+        // 🎯 渲染标题（去除Markdown符号）
+        const renderedTitle = this.renderMarkdown(summary.title || '会议纪要');
+
         let html = `
             <div style="font-family: 'Microsoft YaHei', Arial, sans-serif; line-height: 1.8; color: #333;">
                 <div style="background: linear-gradient(135deg, #4361ee, #6c63ff); color: white; padding: 30px; border-radius: 10px 10px 0 0;">
                     <h1 style="margin: 0; font-size: 24px;">
-                        <i class="fas fa-file-alt"></i> ${summary.title || '会议纪要'}
+                        <i class="fas fa-file-alt"></i> ${renderedTitle}
                     </h1>
                     <p style="margin: 10px 0 0 0; opacity: 0.9; font-size: 14px;">
                         <i class="fas fa-calendar-alt"></i> ${date}
@@ -363,7 +496,7 @@ class EmailApp {
                     <h3 style="color: #4361ee; border-bottom: 2px solid #4361ee; padding-bottom: 10px; font-size: 18px;">
                         <i class="fas fa-align-left"></i> 会议概要
                     </h3>
-                    <p style="margin: 15px 0; line-height: 1.8;">${summary.summary}</p>
+                    <p style="margin: 15px 0; line-height: 1.8;">${this.renderMarkdown(summary.summary)}</p>
                 </div>
             `;
         }
@@ -378,7 +511,7 @@ class EmailApp {
                     <ul style="margin: 15px 0; padding-left: 25px;">
             `;
             summary.keyPoints.forEach(point => {
-                html += `<li style="margin: 10px 0; line-height: 1.8;">${point}</li>`;
+                html += `<li style="margin: 10px 0; line-height: 1.8;">${this.renderMarkdown(point)}</li>`;
             });
             html += `</ul></div>`;
         }
@@ -393,7 +526,7 @@ class EmailApp {
                     <ul style="margin: 15px 0; padding-left: 25px;">
             `;
             summary.actionItems.forEach(item => {
-                html += `<li style="margin: 10px 0; padding: 12px; background: #fff3cd; border-left: 4px solid #ffd166; border-radius: 5px; line-height: 1.8;">${item}</li>`;
+                html += `<li style="margin: 10px 0; padding: 12px; background: #fff3cd; border-left: 4px solid #ffd166; border-radius: 5px; line-height: 1.8;">${this.renderMarkdown(item)}</li>`;
             });
             html += `</ul></div>`;
         }
@@ -408,7 +541,7 @@ class EmailApp {
                     <ul style="margin: 15px 0; padding-left: 25px;">
             `;
             summary.decisions.forEach(decision => {
-                html += `<li style="margin: 10px 0; padding: 12px; background: #e3f2fd; border-left: 4px solid #4cc9f0; border-radius: 5px; line-height: 1.8;">${decision}</li>`;
+                html += `<li style="margin: 10px 0; padding: 12px; background: #e3f2fd; border-left: 4px solid #4cc9f0; border-radius: 5px; line-height: 1.8;">${this.renderMarkdown(decision)}</li>`;
             });
             html += `</ul></div>`;
         }
