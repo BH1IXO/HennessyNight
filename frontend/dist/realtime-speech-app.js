@@ -58,6 +58,10 @@ class RealtimeSpeechManager {
         this.identifiedSpeakers = new Map(); // 🎯 记录所有识别出的说话人 {name: {name, email, count}}
         this.needRestartAfterStop = false; // 🎯 说话人切换时需要重启识别器的标志
 
+        // 🎯 会议信息追踪
+        this.meetingStartTime = null; // 会议开始时间
+        this.meetingEndTime = null; // 会议结束时间
+
         this.initRecognition();
     }
 
@@ -234,6 +238,10 @@ class RealtimeSpeechManager {
             this.transcriptBuffer = '';
             this.isRecording = true;
             this.lastFinalTime = Date.now();
+
+            // 🎯 记录会议开始时间
+            this.meetingStartTime = new Date();
+            console.log('📅 会议开始时间:', this.meetingStartTime.toLocaleString('zh-CN'));
 
             // 启动音频录制用于说话人识别
             this.startAudioCapture();
@@ -733,6 +741,14 @@ class RealtimeSpeechManager {
             console.log('⏹️ 停止录音');
             console.log('🎯 识别队列将继续处理，不会停止');
 
+            // 🎯 记录会议结束时间
+            this.meetingEndTime = new Date();
+            const durationMs = this.meetingEndTime - this.meetingStartTime;
+            const durationMinutes = Math.floor(durationMs / 60000);
+            const durationSeconds = Math.floor((durationMs % 60000) / 1000);
+            console.log('📅 会议结束时间:', this.meetingEndTime.toLocaleString('zh-CN'));
+            console.log(`⏱️ 会议时长: ${durationMinutes}分${durationSeconds}秒`);
+
             // 🎯 发送停止事件
             this.eventBus.emit('recording:stopped', {
                 transcript: this.transcriptBuffer.trim()
@@ -752,6 +768,27 @@ class RealtimeSpeechManager {
      */
     getIdentifiedSpeakers() {
         return Array.from(this.identifiedSpeakers.values());
+    }
+
+    /**
+     * 🎯 获取会议信息
+     */
+    getMeetingInfo() {
+        if (!this.meetingStartTime) {
+            return null;
+        }
+
+        const durationMs = (this.meetingEndTime || new Date()) - this.meetingStartTime;
+        const durationMinutes = Math.floor(durationMs / 60000);
+        const durationSeconds = Math.floor((durationMs % 60000) / 1000);
+
+        return {
+            startTime: this.meetingStartTime,
+            endTime: this.meetingEndTime,
+            duration: `${durationMinutes}分${durationSeconds}秒`,
+            durationMinutes: durationMinutes,
+            attendees: this.getIdentifiedSpeakers()
+        };
     }
 
     /**

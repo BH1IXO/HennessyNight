@@ -60,9 +60,10 @@ export interface StreamChunk {
 
 export interface MeetingSummaryOptions {
   transcript: string;                  // 会议转录文本
-  meetingTitle?: string;               // 会议标题
+  meetingTitle?: string;               // 会议标题（如果未提供，AI会根据内容生成）
   attendees?: string[];                // 参会人员
-  duration?: number;                   // 会议时长（分钟）
+  duration?: string;                   // 会议时长（如："30分15秒"）
+  meetingDate?: Date | string;         // 🎯 新增：会议日期
   language?: 'zh' | 'en';             // 输出语言
   style?: 'formal' | 'casual';        // 输出风格
   includeActionItems?: boolean;        // 是否提取行动项
@@ -218,9 +219,10 @@ export class DeepSeekService extends EventEmitter {
   async generateMeetingSummary(options: MeetingSummaryOptions): Promise<MeetingSummary> {
     const {
       transcript,
-      meetingTitle = '会议',
+      meetingTitle,  // 🎯 不再提供默认值，让AI生成
       attendees = [],
       duration,
+      meetingDate,  // 🎯 新增会议日期
       language = 'zh',
       style = 'formal',
       includeActionItems = true,
@@ -235,9 +237,10 @@ export class DeepSeekService extends EventEmitter {
       // 构建用户提示词
       const userPrompt = this.buildSummaryUserPrompt({
         transcript,
-        meetingTitle,
+        meetingTitle,  // 可能为undefined
         attendees,
         duration,
+        meetingDate,  // 🎯 传递会议日期
         includeActionItems,
         includeSummary,
         includeKeyPoints
@@ -259,7 +262,8 @@ export class DeepSeekService extends EventEmitter {
       const summary = this.parseMeetingSummary(content, {
         meetingTitle,
         attendees,
-        duration
+        duration,
+        meetingDate  // 🎯 传递会议日期用于回退
       });
 
       return summary;
@@ -576,18 +580,20 @@ Important principles:
    */
   private buildSummaryUserPrompt(options: {
     transcript: string;
-    meetingTitle: string;
+    meetingTitle?: string;  // 🎯 改为可选
     attendees: string[];
-    duration?: number;
+    duration?: string;  // 🎯 改为字符串格式
+    meetingDate?: Date | string;  // 🎯 新增
     includeActionItems?: boolean;
     includeSummary?: boolean;
     includeKeyPoints?: boolean;
   }): string {
     const {
       transcript,
-      meetingTitle,
+      meetingTitle,  // 可能为undefined
       attendees,
       duration,
+      meetingDate,
       includeActionItems = true,
       includeSummary = true,
       includeKeyPoints = true
@@ -596,16 +602,28 @@ Important principles:
     let prompt = `请为以下会议生成纪要：\n\n`;
 
     prompt += `**会议信息：**\n`;
-    prompt += `- 会议标题：${meetingTitle}\n`;
+    // 🎯 如果没有标题，要求AI生成
+    if (meetingTitle) {
+      prompt += `- 会议标题：${meetingTitle}\n`;
+    } else {
+      prompt += `- 请根据会议内容生成一个简洁的会议标题\n`;
+    }
+
+    if (meetingDate) {
+      const dateStr = meetingDate instanceof Date ? meetingDate.toLocaleString('zh-CN') : new Date(meetingDate).toLocaleString('zh-CN');
+      prompt += `- 会议日期：${dateStr}\n`;
+    }
+
     if (attendees.length > 0) {
       prompt += `- 参会人员：${attendees.join('、')}\n`;
     }
+
     if (duration) {
-      prompt += `- 会议时长：${duration}分钟\n`;
+      prompt += `- 会议时长：${duration}\n`;
     }
     prompt += `\n`;
 
-    prompt += `**会议转录：**\n${transcript}\n\n`;
+    prompt += `**会议转录（已按说话人格式化）：**\n${transcript}\n\n`;
 
     prompt += `**要求：**\n`;
     if (includeSummary) prompt += `- 生成会议摘要\n`;
@@ -622,16 +640,33 @@ Important principles:
    */
   private parseMeetingSummary(
     content: string,
-    metadata: { meetingTitle: string; attendees: string[]; duration?: number }
+    metadata: { meetingTitle?: string; attendees: string[]; duration?: string; meetingDate?: Date | string }
   ): MeetingSummary {
     // 尝试解析结构化内容
     // 这里使用简单的文本解析，实际可以要求AI返回JSON
 
+    // 🎯 从AI生成的内容中提取会议标题
+    let extractedTitle = metadata.meetingTitle;
+    if (!extractedTitle) {
+      // 尝试从内容中提取标题
+      const titleMatch = content.match(/会议标题[：:]\s*(.+?)(?:\n|$)/i) ||
+                        content.match(/^#\s*(.+?)(?:\n|$)/m) ||
+                        content.match(/^(.+?)(?:\n|$)/);  // 第一行作为标题
+      extractedTitle = titleMatch ? titleMatch[1].trim() : '会议纪要';
+    }
+
+    // 🎯 使用传入的会议日期或当前日期
+    const meetingDateStr = metadata.meetingDate
+      ? (metadata.meetingDate instanceof Date
+          ? metadata.meetingDate.toLocaleDateString('zh-CN')
+          : new Date(metadata.meetingDate).toLocaleDateString('zh-CN'))
+      : new Date().toLocaleDateString('zh-CN');
+
     const summary: MeetingSummary = {
-      title: metadata.meetingTitle,
-      date: new Date().toLocaleDateString('zh-CN'),
+      title: extractedTitle,
+      date: meetingDateStr,
       attendees: metadata.attendees,
-      duration: metadata.duration ? `${metadata.duration}分钟` : undefined,
+      duration: metadata.duration,  // 🎯 直接使用字符串格式的时长
       summary: '',
       keyPoints: [],
       actionItems: [],

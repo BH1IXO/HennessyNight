@@ -19,6 +19,13 @@ class SummaryManager {
      * 生成会议纪要（调用DeepSeek API）
      */
     async generateSummary(transcript) {
+        return this.generateSummaryWithMeetingInfo(transcript, null);
+    }
+
+    /**
+     * 🎯 生成会议纪要（带会议信息）
+     */
+    async generateSummaryWithMeetingInfo(transcript, meetingInfo) {
         if (!transcript || transcript.trim().length === 0) {
             alert('没有转录内容，无法生成纪要');
             return;
@@ -31,19 +38,30 @@ class SummaryManager {
             // 显示加载状态
             this.showLoading();
 
+            // 🎯 准备请求数据
+            const requestData = {
+                transcript: transcript,
+                language: 'zh',
+                style: 'formal'
+            };
+
+            // 🎯 如果有会议信息，添加到请求中
+            if (meetingInfo) {
+                requestData.meetingDate = meetingInfo.startTime;
+                requestData.duration = meetingInfo.duration;
+                requestData.attendees = meetingInfo.attendees.map(a => a.name);
+                console.log('📅 会议日期:', meetingInfo.startTime);
+                console.log('⏱️ 会议时长:', meetingInfo.duration);
+                console.log('👥 参会人员:', requestData.attendees.join(', '));
+            }
+
             // 调用后端API
             const response = await fetch(`${API_BASE_URL}/summaries/generate-from-text`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({
-                    transcript: transcript,
-                    meetingTitle: '会议记录',
-                    attendees: [],  // 不传递参会人员，让AI从转录内容中提取
-                    language: 'zh',
-                    style: 'formal'
-                })
+                body: JSON.stringify(requestData)
             });
 
             if (!response.ok) {
@@ -738,33 +756,56 @@ function initTabSwitching() {
  * 从实时录音自动生成会议纪要
  */
 function autoGenerateSummaryFromRecording() {
-    // 从实时转录获取文本
-    let transcript = '';
+    // 🎯 从UI获取带说话人的转录内容
+    let transcriptWithSpeakers = [];
 
-    // 尝试多种方式获取转录文本
-    // 方法1: 通过 window.realtimeApp.speechManager
-    if (window.realtimeApp && window.realtimeApp.speechManager && typeof window.realtimeApp.speechManager.getFullTranscript === 'function') {
-        transcript = window.realtimeApp.speechManager.getFullTranscript();
-        console.log('✅ 从 realtimeApp.speechManager.getFullTranscript() 获取文本');
-    }
-    // 方法2: 通过 window.realtimeApp.speechManager.transcriptBuffer
-    else if (window.realtimeApp && window.realtimeApp.speechManager && window.realtimeApp.speechManager.transcriptBuffer) {
-        transcript = window.realtimeApp.speechManager.transcriptBuffer.trim();
-        console.log('✅ 从 realtimeApp.speechManager.transcriptBuffer 获取文本');
-    }
-    // 方法3: 从DOM中提取
-    else {
-        const segments = document.querySelectorAll('#transcriptDisplay .transcript-segment:not(.interim-text) .segment-text');
-        transcript = Array.from(segments).map(seg => seg.textContent.trim()).filter(t => t).join(' ');
-        console.log('✅ 从DOM提取文本，找到', segments.length, '个片段');
+    if (window.realtimeApp && window.realtimeApp.uiManager && typeof window.realtimeApp.uiManager.getTranscriptWithSpeakers === 'function') {
+        transcriptWithSpeakers = window.realtimeApp.uiManager.getTranscriptWithSpeakers();
+        console.log('✅ 从 uiManager.getTranscriptWithSpeakers() 获取带说话人的转录');
+    } else {
+        // 备用方案：从DOM中提取
+        const container = document.getElementById('transcriptDisplay');
+        if (container) {
+            const messages = container.querySelectorAll('.speaker-message');
+            messages.forEach(msg => {
+                const speakerName = msg.querySelector('.speaker-name')?.textContent || '未知';
+                const content = msg.querySelector('.message-content')?.textContent || '';
+                if (content.trim()) {
+                    transcriptWithSpeakers.push({
+                        speaker: speakerName,
+                        content: content.trim()
+                    });
+                }
+            });
+            console.log('✅ 从DOM提取带说话人的转录');
+        }
     }
 
-    console.log('📝 从录音自动生成纪要，转录文本长度:', transcript.length);
-    console.log('📝 转录文本预览:', transcript.substring(0, 100));
+    // 🎯 获取会议信息
+    let meetingInfo = null;
+    if (window.realtimeApp && window.realtimeApp.speechManager && typeof window.realtimeApp.speechManager.getMeetingInfo === 'function') {
+        meetingInfo = window.realtimeApp.speechManager.getMeetingInfo();
+        console.log('✅ 获取会议信息:', meetingInfo);
+    }
 
-    if (transcript && transcript.length > 0) {
-        // 直接调用DeepSeek生成纪要
-        summaryManager.generateSummary(transcript);
+    // 🎯 格式化转录文本为 "说话人：内容" 格式
+    const formattedTranscript = transcriptWithSpeakers
+        .map(item => `${item.speaker}：${item.content}`)
+        .join('\n');
+
+    console.log('📝 从录音自动生成纪要');
+    console.log('📝 转录条目数:', transcriptWithSpeakers.length);
+    console.log('📝 格式化转录预览:\n', formattedTranscript.substring(0, 200));
+
+    if (meetingInfo) {
+        console.log('📅 会议开始时间:', meetingInfo.startTime);
+        console.log('⏱️ 会议时长:', meetingInfo.duration);
+        console.log('👥 参会人员:', meetingInfo.attendees.map(a => a.name).join(', '));
+    }
+
+    if (formattedTranscript && formattedTranscript.length > 0) {
+        // 🎯 调用生成纪要，传递会议信息
+        summaryManager.generateSummaryWithMeetingInfo(formattedTranscript, meetingInfo);
     } else {
         console.warn('⚠️ 没有转录内容，跳过自动生成纪要');
         alert('没有录音内容，无法生成会议纪要。请确保说话时间超过3秒。');

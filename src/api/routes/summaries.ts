@@ -92,9 +92,10 @@ router.post('/:id/regenerate', asyncHandler(async (req: Request, res: Response) 
 router.post('/generate-from-text', asyncHandler(async (req: Request, res: Response) => {
   const {
     transcript,
-    meetingTitle = '会议',
+    meetingTitle,  // 🎯 不再提供默认值，让AI从转录内容生成
     attendees = [],
     duration,
+    meetingDate,  // 🎯 新增：会议日期
     language = 'zh',
     style = 'formal'
   } = req.body;
@@ -105,15 +106,18 @@ router.post('/generate-from-text', asyncHandler(async (req: Request, res: Respon
 
   console.log('[Summaries API] 收到生成请求');
   console.log(`[Summaries API] 转录文本长度: ${transcript.length}`);
-  console.log(`[Summaries API] 参会人员: ${attendees.join(', ') || '无'}`);
+  console.log(`[Summaries API] 参会人员: ${attendees.join(', ') || '(从转录中提取)'}`);
+  console.log(`[Summaries API] 会议日期: ${meetingDate || '未提供'}`);
+  console.log(`[Summaries API] 会议时长: ${duration || '未提供'}`);
 
   try {
-    // 调用DeepSeek生成纪要
+    // 🎯 调用DeepSeek生成纪要（会议标题由AI生成）
     const summary = await deepseek.generateMeetingSummary({
       transcript,
-      meetingTitle,
+      meetingTitle,  // 如果未提供，AI会从转录内容生成
       attendees,
       duration,
+      meetingDate,  // 🎯 传递会议日期
       language,
       style,
       includeActionItems: true,
