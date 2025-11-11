@@ -906,14 +906,36 @@ router.post('/identify-speaker',
         console.log(`[IdentifySpeaker] ✅ 音频格式正确,无需转换`);
       }
 
-      // 使用WeSpeaker提取声纹特征
+      // 🎯 使用多说话人识别服务
       const { spawn } = require('child_process');
       const pythonPath = path.join(process.cwd(), 'python', 'pyannote-env', 'Scripts', 'python.exe');
-      const scriptPath = path.join(process.cwd(), 'python', 'wespeaker_service.py');
+      const multiSpeakerScript = path.join(process.cwd(), 'python', 'multi_speaker_识别.py');
 
-      const extractFeatures = (): Promise<any> => {
+      // 准备参考声纹JSON
+      const referenceEmbeddings: Record<string, number[]> = {};
+      for (const speaker of speakers) {
+        if (speaker.voiceprint && speaker.voiceprint.length > 0) {
+          referenceEmbeddings[speaker.name] = speaker.voiceprint;
+        }
+      }
+      const referenceJson = JSON.stringify(referenceEmbeddings);
+
+      console.log(`[IdentifySpeaker] 使用多说话人识别模式`);
+      console.log(`[IdentifySpeaker] 阈值: 40% (适应音频质量差异)`);
+
+      const identifyMultiSpeaker = (): Promise<any> => {
         return new Promise((resolve, reject) => {
-          const pythonProcess = spawn(pythonPath, [scriptPath, 'extract', processedAudioPath, 'chinese', 'cpu']);
+          // 使用多说话人识别: identify_multi <audio> <reference_json> [threshold] [chunk_duration] [model] [device]
+          const pythonProcess = spawn(pythonPath, [
+            multiSpeakerScript,
+            'identify_multi',
+            processedAudioPath,
+            referenceJson,
+            '0.40',  // threshold: 40%
+            '4.0',   // chunk_duration: 4秒
+            'chinese',
+            'cpu'
+          ]);
 
           let stdout = '';
           let stderr = '';
@@ -924,6 +946,11 @@ router.post('/identify-speaker',
 
           pythonProcess.stderr.on('data', (data: Buffer) => {
             stderr += data.toString();
+            // 实时输出Python日志
+            const lines = stderr.trim().split('\n');
+            lines.forEach(line => {
+              if (line) console.log(`[IdentifySpeaker/Python] ${line}`);
+            });
           });
 
           pythonProcess.on('close', (code: number) => {
@@ -932,10 +959,10 @@ router.post('/identify-speaker',
                 const result = JSON.parse(stdout);
                 resolve(result);
               } catch (e) {
-                reject(new Error('Failed to parse WeSpeaker features'));
+                reject(new Error('Failed to parse multi-speaker result'));
               }
             } else {
-              reject(new Error(`WeSpeaker process exited with code ${code}: ${stderr}`));
+              reject(new Error(`Multi-speaker process exited with code ${code}`));
             }
           });
 
@@ -945,51 +972,35 @@ router.post('/identify-speaker',
         });
       };
 
-      const result = await extractFeatures();
+      const result = await identifyMultiSpeaker();
 
       if (!result.success) {
-        throw new Error('Feature extraction failed');
+        throw new Error('Multi-speaker identification failed');
       }
 
-      const userEmbedding = result.embedding;
       console.log(`[IdentifySpeaker] ====================`);
-      console.log(`[IdentifySpeaker] ✅ 特征提取完成: ${userEmbedding.length}维`);
-      console.log(`[IdentifySpeaker] 🔢 特征向量预览: [${userEmbedding.slice(0, 5).map((v: number) => v.toFixed(4)).join(', ')}...]`);
+      console.log(`[IdentifySpeaker] ✅ 多说话人识别完成`);
+      console.log(`[IdentifySpeaker] 检测到 ${result.numDetectedSpeakers || 0} 个说话人`);
+      if (result.detectedSpeakers && result.detectedSpeakers.length > 0) {
+        console.log(`[IdentifySpeaker] 说话人列表: ${result.detectedSpeakers.join(', ')}`);
+      }
       console.log(`[IdentifySpeaker] ====================`);
-      console.log(`[IdentifySpeaker] 🔍 开始声纹比对...`);
 
-      // 计算余弦相似度
-      const cosineSimilarity = (a: number[], b: number[]): number => {
-        if (a.length !== b.length) return 0;
-        let dotProduct = 0;
-        let normA = 0;
-        let normB = 0;
-        for (let i = 0; i < a.length; i++) {
-          dotProduct += a[i] * b[i];
-          normA += a[i] * a[i];
-          normB += b[i] * b[i];
-        }
-        return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-      };
-
-      // 匹配说话人
+      // 转换结果格式以兼容现有代码
       let bestMatch: any = null;
-      let bestSimilarity = 0;
+      let bestSimilarity = result.confidence || 0;
       let allScores: { name: string; similarity: number }[] = [];
 
-      for (const speaker of speakers) {
-        if (!speaker.voiceprint || speaker.voiceprint.length === 0) {
-          console.log(`[IdentifySpeaker]   ⚠️ ${speaker.name}: 无声纹数据，跳过`);
-          continue;
-        }
+      if (result.identified && result.profileId) {
+        // 找到匹配的speaker对象
+        bestMatch = speakers.find((s: any) => s.name === result.profileId);
 
-        const similarity = cosineSimilarity(userEmbedding, speaker.voiceprint);
-        allScores.push({ name: speaker.name, similarity });
-        console.log(`[IdentifySpeaker]   📊 ${speaker.name}: ${(similarity * 100).toFixed(2)}% (向量维度:${speaker.voiceprint.length})`);
-
-        if (similarity > bestSimilarity) {
-          bestSimilarity = similarity;
-          bestMatch = speaker;
+        // 构建所有分数列表
+        if (result.candidates) {
+          allScores = result.candidates.map((c: any) => ({
+            name: c.profileId,
+            similarity: c.confidence
+          }));
         }
       }
 
@@ -1012,7 +1023,12 @@ router.post('/identify-speaker',
             matched: true,
             speaker: bestMatch,
             similarity: bestSimilarity,
-            allScores
+            allScores,
+            // 多说话人检测信息
+            multiSpeaker: result.multiSpeaker || false,
+            detectedSpeakers: result.detectedSpeakers || [bestMatch.name],
+            numDetectedSpeakers: result.numDetectedSpeakers || 1,
+            candidates: result.candidates || []
           }
         };
 
@@ -1042,7 +1058,12 @@ router.post('/identify-speaker',
           data: {
             matched: false,
             bestSimilarity: bestSimilarity,
-            allScores
+            allScores,
+            // 多说话人检测信息
+            multiSpeaker: false,
+            detectedSpeakers: [],
+            numDetectedSpeakers: 0,
+            candidates: result.candidates || []
           }
         };
 
