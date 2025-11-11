@@ -605,13 +605,11 @@ class EmailApp {
         // 获取表单数据
         const recipientsInput = document.getElementById('emailRecipients');
         const ccInput = document.getElementById('emailCC');
-        const bccInput = document.getElementById('emailBCC');
         const subjectInput = document.getElementById('emailSubject');
 
         // 解析邮箱列表
         const recipients = this.parseEmailList(recipientsInput.value);
         const cc = this.parseEmailList(ccInput.value);
-        const bcc = this.parseEmailList(bccInput.value);
         const subject = subjectInput.value.trim();
 
         // 验证输入
@@ -633,7 +631,7 @@ class EmailApp {
         }
 
         // 验证所有邮箱格式
-        const allEmails = [...recipients, ...cc, ...bcc];
+        const allEmails = [...recipients, ...cc];
         const invalidEmails = allEmails.filter(email => !this.validateEmail(email));
         if (invalidEmails.length > 0) {
             alert(`以下邮箱格式不正确:\n${invalidEmails.join('\n')}`);
@@ -641,7 +639,7 @@ class EmailApp {
         }
 
         // 确认发送
-        const confirmMessage = `确认发送邮件给以下收件人吗?\n\n收件人 (${recipients.length}): ${recipients.join(', ')}${cc.length > 0 ? `\n\n抄送 (${cc.length}): ${cc.join(', ')}` : ''}${bcc.length > 0 ? `\n\n密送 (${bcc.length}): ${bcc.length} 人` : ''}`;
+        const confirmMessage = `确认发送邮件给以下收件人吗?\n\n收件人 (${recipients.length}): ${recipients.join(', ')}${cc.length > 0 ? `\n\n抄送 (${cc.length}): ${cc.join(', ')}` : ''}`;
 
         if (!confirm(confirmMessage)) {
             return;
@@ -663,7 +661,6 @@ class EmailApp {
                 body: JSON.stringify({
                     recipients: recipients,
                     cc: cc.length > 0 ? cc : undefined,
-                    bcc: bcc.length > 0 ? bcc : undefined,
                     subject: subject,
                     summary: this.currentSummary,
                     meetingDate: this.currentSummary.meetingDate || this.currentSummary.date || new Date().toLocaleDateString('zh-CN')
