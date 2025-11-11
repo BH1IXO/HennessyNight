@@ -234,6 +234,9 @@ class RealtimeSpeechManager {
 
             console.log('✅ 音频流获取成功');
 
+            // 🎯 准备工作完成，显示倒计时让用户准备
+            await this.showCountdown();
+
             // 重要：必须先设置 isRecording = true，否则 startAudioCapture 会跳过
             this.transcriptBuffer = '';
             this.isRecording = true;
@@ -255,6 +258,86 @@ class RealtimeSpeechManager {
             alert('无法访问麦克风');
             throw error;
         }
+    }
+
+    /**
+     * 🎯 显示倒计时动画（3, 2, 1）
+     */
+    async showCountdown() {
+        const transcriptArea = document.getElementById('transcriptDisplay');
+        if (!transcriptArea) {
+            console.error('找不到transcriptDisplay元素');
+            return;
+        }
+
+        // 设置父容器为相对定位
+        transcriptArea.style.position = 'relative';
+
+        // 创建倒计时容器
+        const countdownDiv = document.createElement('div');
+        countdownDiv.id = 'countdown-overlay';
+        countdownDiv.style.cssText = `
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(67, 97, 238, 0.95);
+            z-index: 1000;
+            border-radius: 8px;
+        `;
+
+        const countdownNumber = document.createElement('div');
+        countdownNumber.id = 'countdown-number';
+        countdownNumber.style.cssText = `
+            font-size: 120px;
+            font-weight: bold;
+            color: white;
+            text-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            animation: countdownPulse 1s ease-in-out;
+        `;
+
+        countdownDiv.appendChild(countdownNumber);
+        transcriptArea.appendChild(countdownDiv);
+
+        // 添加动画样式
+        if (!document.getElementById('countdown-animation-style')) {
+            const style = document.createElement('style');
+            style.id = 'countdown-animation-style';
+            style.textContent = `
+                @keyframes countdownPulse {
+                    0% { transform: scale(0.5); opacity: 0; }
+                    50% { transform: scale(1.2); opacity: 1; }
+                    100% { transform: scale(1); opacity: 1; }
+                }
+                @keyframes countdownFadeOut {
+                    0% { transform: scale(1); opacity: 1; }
+                    100% { transform: scale(1.5); opacity: 0; }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+
+        // 倒计时：3, 2, 1
+        for (let i = 3; i > 0; i--) {
+            countdownNumber.textContent = i;
+            countdownNumber.style.animation = 'none';
+            // 触发重排以重启动画
+            void countdownNumber.offsetWidth;
+            countdownNumber.style.animation = 'countdownPulse 1s ease-in-out';
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        // 显示"开始"
+        countdownNumber.textContent = '开始！';
+        countdownNumber.style.animation = 'countdownFadeOut 0.5s ease-out';
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // 移除倒计时容器
+        countdownDiv.remove();
     }
 
     /**
@@ -1291,94 +1374,10 @@ class UIManager {
 
     async startRecording() {
         try {
-            // 🎯 显示倒计时
-            await this.showCountdown();
-
-            // 🎯 倒计时结束后开始录音
             await this.speechManager.startRecording();
         } catch (error) {
             alert('启动录音失败: ' + error.message);
         }
-    }
-
-    /**
-     * 🎯 显示倒计时动画（3, 2, 1）
-     */
-    async showCountdown() {
-        const transcriptArea = document.getElementById('transcriptDisplay');
-        if (!transcriptArea) {
-            console.error('找不到transcriptDisplay元素');
-            return;
-        }
-
-        // 设置父容器为相对定位
-        transcriptArea.style.position = 'relative';
-
-        // 创建倒计时容器
-        const countdownDiv = document.createElement('div');
-        countdownDiv.id = 'countdown-overlay';
-        countdownDiv.style.cssText = `
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: rgba(67, 97, 238, 0.95);
-            z-index: 1000;
-            border-radius: 8px;
-        `;
-
-        const countdownNumber = document.createElement('div');
-        countdownNumber.id = 'countdown-number';
-        countdownNumber.style.cssText = `
-            font-size: 120px;
-            font-weight: bold;
-            color: white;
-            text-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-            animation: countdownPulse 1s ease-in-out;
-        `;
-
-        countdownDiv.appendChild(countdownNumber);
-        transcriptArea.appendChild(countdownDiv);
-
-        // 添加动画样式
-        if (!document.getElementById('countdown-animation-style')) {
-            const style = document.createElement('style');
-            style.id = 'countdown-animation-style';
-            style.textContent = `
-                @keyframes countdownPulse {
-                    0% { transform: scale(0.5); opacity: 0; }
-                    50% { transform: scale(1.2); opacity: 1; }
-                    100% { transform: scale(1); opacity: 1; }
-                }
-                @keyframes countdownFadeOut {
-                    0% { transform: scale(1); opacity: 1; }
-                    100% { transform: scale(1.5); opacity: 0; }
-                }
-            `;
-            document.head.appendChild(style);
-        }
-
-        // 倒计时：3, 2, 1
-        for (let i = 3; i > 0; i--) {
-            countdownNumber.textContent = i;
-            countdownNumber.style.animation = 'none';
-            // 触发重排以重启动画
-            void countdownNumber.offsetWidth;
-            countdownNumber.style.animation = 'countdownPulse 1s ease-in-out';
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-
-        // 显示"开始"
-        countdownNumber.textContent = '开始！';
-        countdownNumber.style.animation = 'countdownFadeOut 0.5s ease-out';
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        // 移除倒计时容器
-        countdownDiv.remove();
     }
 
     stopRecording() {
