@@ -116,119 +116,179 @@ export class EmailService {
    * 生成会议纪要HTML内容
    */
   private generateMeetingSummaryHTML(summary: MeetingSummary, meetingDate?: string): string {
+    // 格式化日期和时间
+    const formattedDate = meetingDate || summary.date;
+    const displayDate = formattedDate ? new Date(formattedDate).toLocaleDateString('zh-CN', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      weekday: 'long'
+    }) : '未知日期';
+
     return `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
     body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
       line-height: 1.6;
-      color: #333;
+      color: #2d3748;
+      background: linear-gradient(135deg, #f5f7fa 0%, #e4edf5 100%);
+      padding: 20px;
+    }
+    .email-wrapper {
       max-width: 800px;
       margin: 0 auto;
-      padding: 20px;
-      background-color: #f5f5f5;
-    }
-    .container {
       background: white;
-      padding: 30px;
-      border-radius: 8px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 10px 40px rgba(102, 126, 234, 0.15);
     }
-    .header {
-      border-bottom: 3px solid #06ffa5;
-      padding-bottom: 20px;
-      margin-bottom: 30px;
+    .email-header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 35px 40px;
+      text-align: center;
     }
-    h1 {
-      color: #1a1a1a;
-      margin: 0 0 10px 0;
-      font-size: 28px;
+    .email-header h1 {
+      font-size: 32px;
+      font-weight: 700;
+      margin-bottom: 15px;
+      letter-spacing: -0.5px;
     }
-    .meta-info {
-      color: #666;
-      font-size: 14px;
+    .email-header .meta-info {
+      font-size: 16px;
+      opacity: 0.95;
+      margin-top: 10px;
+    }
+    .email-header .meta-info div {
+      margin: 5px 0;
+    }
+    .email-body {
+      padding: 40px;
     }
     .section {
-      margin: 25px 0;
+      margin-bottom: 35px;
+      padding: 20px;
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.03) 0%, rgba(118, 75, 162, 0.03) 100%);
+      border-radius: 12px;
+      border: 1px solid rgba(102, 126, 234, 0.1);
+      transition: all 0.3s ease;
+    }
+    .section:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(102, 126, 234, 0.12);
+      border-color: rgba(102, 126, 234, 0.2);
     }
     .section-title {
-      color: #1a1a1a;
-      font-size: 20px;
+      color: #667eea;
+      font-size: 22px;
       font-weight: 600;
-      margin-bottom: 15px;
-      padding-left: 10px;
-      border-left: 4px solid #06ffa5;
+      margin-bottom: 18px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid rgba(102, 126, 234, 0.15);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .section-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
     }
     .attendees {
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
+      gap: 12px;
+      margin-top: 12px;
     }
     .attendee-tag {
-      background: #e8f9f5;
-      color: #06ffa5;
-      padding: 5px 12px;
-      border-radius: 15px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 8px 16px;
+      border-radius: 20px;
       font-size: 14px;
+      font-weight: 500;
+      box-shadow: 0 2px 8px rgba(102, 126, 234, 0.25);
     }
     .summary-text {
-      background: #f9f9f9;
+      color: #2d3748;
+      line-height: 1.9;
+      font-size: 15px;
+      text-align: justify;
       padding: 15px;
-      border-radius: 6px;
-      line-height: 1.8;
+      background: white;
+      border-radius: 8px;
+      margin-top: 12px;
     }
     .key-points, .decisions, .next-steps {
-      padding-left: 0;
       list-style: none;
+      padding: 0;
+      margin-top: 15px;
     }
     .key-points li, .decisions li, .next-steps li {
-      padding: 10px 0;
-      padding-left: 25px;
-      position: relative;
+      padding: 16px 20px;
+      margin-bottom: 12px;
+      background: white;
+      border-left: 5px solid #667eea;
+      border-radius: 10px;
+      font-size: 15px;
+      line-height: 1.7;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+      transition: all 0.3s ease;
     }
-    .key-points li:before {
-      content: "▶";
-      position: absolute;
-      left: 0;
-      color: #06ffa5;
-    }
-    .decisions li:before {
-      content: "✓";
-      position: absolute;
-      left: 0;
-      color: #4caf50;
-      font-weight: bold;
-    }
-    .next-steps li:before {
-      content: "→";
-      position: absolute;
-      left: 0;
-      color: #2196f3;
-      font-weight: bold;
+    .key-points li:hover, .decisions li:hover, .next-steps li:hover {
+      transform: translateX(8px);
+      box-shadow: 0 4px 16px rgba(102, 126, 234, 0.2);
     }
     .action-items {
-      background: #fff3e0;
-      padding: 15px;
-      border-radius: 6px;
-      border-left: 4px solid #ff9800;
+      margin-top: 15px;
     }
     .action-item {
-      margin: 10px 0;
-      padding: 10px;
-      background: white;
-      border-radius: 4px;
+      padding: 16px 20px;
+      margin-bottom: 12px;
+      background: linear-gradient(135deg, #fff5e6 0%, #ffe8cc 100%);
+      border-left: 5px solid #ff9500;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(255, 149, 0, 0.1);
+      transition: all 0.3s ease;
+    }
+    .action-item:hover {
+      transform: translateX(8px);
+      box-shadow: 0 4px 16px rgba(255, 149, 0, 0.25);
     }
     .action-task {
       font-weight: 600;
-      color: #333;
+      color: #2d3748;
+      font-size: 15px;
+      margin-bottom: 8px;
     }
     .action-meta {
       font-size: 13px;
-      color: #666;
-      margin-top: 5px;
+      color: #718096;
+      margin-top: 8px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+    }
+    .action-meta span {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
     }
     .priority-high {
       color: #f44336;
@@ -243,89 +303,168 @@ export class EmailService {
       font-weight: 600;
     }
     .footer {
-      margin-top: 40px;
-      padding-top: 20px;
-      border-top: 1px solid #e0e0e0;
+      background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+      padding: 30px 40px;
       text-align: center;
-      color: #999;
+      border-top: 3px solid #667eea;
+    }
+    .footer-content {
+      margin-bottom: 20px;
+    }
+    .footer-content p {
+      color: #666;
+      font-size: 14px;
+      margin: 8px 0;
+      line-height: 1.8;
+    }
+    .footer-brand {
+      margin-top: 25px;
+      padding-top: 20px;
+      border-top: 1px solid #dee2e6;
+    }
+    .footer-brand .brand-name {
+      font-size: 18px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 8px;
+    }
+    .footer-brand .team-info {
+      color: #718096;
       font-size: 13px;
+      margin-top: 8px;
+    }
+    .footer-brand .team-members {
+      color: #999;
+      font-size: 12px;
+      margin-top: 5px;
+    }
+    @media only screen and (max-width: 600px) {
+      .email-body {
+        padding: 25px;
+      }
+      .email-header {
+        padding: 25px 20px;
+      }
+      .email-header h1 {
+        font-size: 24px;
+      }
+      .section-title {
+        font-size: 18px;
+      }
+      .attendees {
+        gap: 8px;
+      }
+      .attendee-tag {
+        padding: 6px 12px;
+        font-size: 13px;
+      }
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="header">
-      <h1>${summary.title}</h1>
+  <div class="email-wrapper">
+    <div class="email-header">
+      <h1>${summary.title || '会议纪要'}</h1>
       <div class="meta-info">
-        <div>日期: ${meetingDate || summary.date}</div>
-        ${summary.duration ? `<div>时长: ${summary.duration}</div>` : ''}
+        <div>📅 会议日期: ${displayDate}</div>
+        ${summary.duration ? `<div>⏱️ 会议时长: ${summary.duration}</div>` : ''}
       </div>
     </div>
 
-    ${summary.attendees && summary.attendees.length > 0 ? `
-    <div class="section">
-      <div class="section-title">参会人员</div>
-      <div class="attendees">
-        ${summary.attendees.map(attendee => `<span class="attendee-tag">${attendee}</span>`).join('')}
+    <div class="email-body">
+      ${summary.attendees && summary.attendees.length > 0 ? `
+      <div class="section">
+        <div class="section-title">
+          <span class="section-icon">👥</span>
+          参会人员
+        </div>
+        <div class="attendees">
+          ${summary.attendees.map(attendee => `<span class="attendee-tag">${attendee}</span>`).join('')}
+        </div>
       </div>
-    </div>
-    ` : ''}
+      ` : ''}
 
-    ${summary.summary ? `
-    <div class="section">
-      <div class="section-title">会议摘要</div>
-      <div class="summary-text">${summary.summary.replace(/\n/g, '<br>')}</div>
-    </div>
-    ` : ''}
+      ${summary.summary ? `
+      <div class="section">
+        <div class="section-title">
+          <span class="section-icon">📋</span>
+          会议摘要
+        </div>
+        <div class="summary-text">${summary.summary.replace(/\n/g, '<br>')}</div>
+      </div>
+      ` : ''}
 
-    ${summary.keyPoints && summary.keyPoints.length > 0 ? `
-    <div class="section">
-      <div class="section-title">关键讨论点</div>
-      <ul class="key-points">
-        ${summary.keyPoints.map(point => `<li>${point}</li>`).join('')}
-      </ul>
-    </div>
-    ` : ''}
+      ${summary.keyPoints && summary.keyPoints.length > 0 ? `
+      <div class="section">
+        <div class="section-title">
+          <span class="section-icon">💡</span>
+          关键讨论点
+        </div>
+        <ul class="key-points">
+          ${summary.keyPoints.map(point => `<li>${point}</li>`).join('')}
+        </ul>
+      </div>
+      ` : ''}
 
-    ${summary.decisions && summary.decisions.length > 0 ? `
-    <div class="section">
-      <div class="section-title">决策事项</div>
-      <ul class="decisions">
-        ${summary.decisions.map(decision => `<li>${decision}</li>`).join('')}
-      </ul>
-    </div>
-    ` : ''}
+      ${summary.decisions && summary.decisions.length > 0 ? `
+      <div class="section">
+        <div class="section-title">
+          <span class="section-icon">✓</span>
+          决策事项
+        </div>
+        <ul class="decisions">
+          ${summary.decisions.map(decision => `<li>${decision}</li>`).join('')}
+        </ul>
+      </div>
+      ` : ''}
 
-    ${summary.actionItems && summary.actionItems.length > 0 ? `
-    <div class="section">
-      <div class="section-title">行动项</div>
-      <div class="action-items">
-        ${summary.actionItems.map(item => `
-          <div class="action-item">
-            <div class="action-task">${item.task}</div>
-            <div class="action-meta">
-              ${item.assignee ? `<span>负责人: ${item.assignee}</span> ` : ''}
-              ${item.deadline ? `<span>截止日期: ${item.deadline}</span> ` : ''}
-              ${item.priority ? `<span class="priority-${item.priority}">优先级: ${item.priority === 'high' ? '高' : item.priority === 'medium' ? '中' : '低'}</span>` : ''}
+      ${summary.actionItems && summary.actionItems.length > 0 ? `
+      <div class="section">
+        <div class="section-title">
+          <span class="section-icon">📌</span>
+          行动项
+        </div>
+        <div class="action-items">
+          ${summary.actionItems.map(item => `
+            <div class="action-item">
+              <div class="action-task">📍 ${item.task}</div>
+              <div class="action-meta">
+                ${item.assignee ? `<span>👤 负责人: ${item.assignee}</span>` : ''}
+                ${item.deadline ? `<span>📅 截止日期: ${item.deadline}</span>` : ''}
+                ${item.priority ? `<span class="priority-${item.priority}">⚡ 优先级: ${item.priority === 'high' ? '高' : item.priority === 'medium' ? '中' : '低'}</span>` : ''}
+              </div>
             </div>
-          </div>
-        `).join('')}
+          `).join('')}
+        </div>
       </div>
-    </div>
-    ` : ''}
+      ` : ''}
 
-    ${summary.nextSteps && summary.nextSteps.length > 0 ? `
-    <div class="section">
-      <div class="section-title">下一步计划</div>
-      <ul class="next-steps">
-        ${summary.nextSteps.map(step => `<li>${step}</li>`).join('')}
-      </ul>
+      ${summary.nextSteps && summary.nextSteps.length > 0 ? `
+      <div class="section">
+        <div class="section-title">
+          <span class="section-icon">→</span>
+          下一步计划
+        </div>
+        <ul class="next-steps">
+          ${summary.nextSteps.map(step => `<li>${step}</li>`).join('')}
+        </ul>
+      </div>
+      ` : ''}
     </div>
-    ` : ''}
 
     <div class="footer">
-      <p>此邮件由会议纪要系统自动生成</p>
-      <p>Generated by Meeting Summary System</p>
+      <div class="footer-content">
+        <p>本邮件由 <strong>VNET 智能会议 Agent</strong> 自动生成</p>
+        <p style="font-size: 13px; color: #999;">Generated by VNET Intelligent Meeting Agent</p>
+      </div>
+      <div class="footer-brand">
+        <div class="brand-name">由轩尼诗之夜团队研发</div>
+        <div class="team-info">队长：谭红波</div>
+        <div class="team-members">队员：陈宁 · 任玺言 · 李雨荷</div>
+      </div>
     </div>
   </div>
 </body>
