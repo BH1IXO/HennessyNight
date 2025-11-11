@@ -551,10 +551,10 @@ class EmailApp {
                 </div>
                 <div style="padding: 20px; background: #f8f9fa; text-align: center; border-radius: 0 0 10px 10px; color: #666; font-size: 13px;">
                     <p style="margin: 0;">
-                        <i class="fas fa-robot"></i> 本邮件由VNET智能会议纪要Agent自动生成
+                        <i class="fas fa-robot"></i> 本邮件由 VNET 智能会议 Agent 自动生成
                     </p>
-                    <p style="margin: 5px 0 0 0;">
-                        由轩尼诗之夜团队提供技术支持
+                    <p style="margin: 5px 0 0 0; font-size: 11px;">
+                        由轩尼诗之夜团队研发
                     </p>
                     <p style="margin: 5px 0 0 0;">
                         <i class="fas fa-calendar"></i> 生成时间: ${new Date().toLocaleString('zh-CN')}
