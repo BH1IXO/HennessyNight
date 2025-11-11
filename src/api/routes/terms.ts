@@ -412,8 +412,68 @@ router.post('/upload-document', upload.single('document'), asyncHandler(async (r
 }));
 
 /**
+ * 智能匹配术语（支持英文不区分大小写，中文词边界检测）
+ */
+function smartMatchTerm(text: string, termToMatch: string): Array<{ start: number; end: number; matchedText: string }> {
+  const positions: Array<{ start: number; end: number; matchedText: string }> = [];
+
+  // 判断是否为纯英文术语
+  const isEnglishTerm = /^[a-zA-Z\s\-_]+$/.test(termToMatch);
+
+  if (isEnglishTerm) {
+    // 🎯 英文不区分大小写匹配
+    const lowerText = text.toLowerCase();
+    const lowerTerm = termToMatch.toLowerCase();
+
+    let index = lowerText.indexOf(lowerTerm);
+    while (index !== -1) {
+      // 检查词边界（前后是否为非字母字符）
+      const before = index > 0 ? text[index - 1] : ' ';
+      const after = index + termToMatch.length < text.length ? text[index + termToMatch.length] : ' ';
+
+      const isWordBoundary = !/[a-zA-Z]/.test(before) && !/[a-zA-Z]/.test(after);
+
+      if (isWordBoundary) {
+        positions.push({
+          start: index,
+          end: index + termToMatch.length,
+          matchedText: text.substring(index, index + termToMatch.length)
+        });
+      }
+
+      index = lowerText.indexOf(lowerTerm, index + 1);
+    }
+  } else {
+    // 🎯 中文或混合文本，精确匹配
+    let index = text.indexOf(termToMatch);
+    while (index !== -1) {
+      // 中文词边界检测：检查前后字符是否为标点或空格
+      const before = index > 0 ? text[index - 1] : ' ';
+      const after = index + termToMatch.length < text.length ? text[index + termToMatch.length] : ' ';
+
+      // 允许前后是空格、标点符号、或字符串开头/结尾
+      const beforeOk = /[\s，。！？、；：""''（）【】《》\n\r]/.test(before) || index === 0;
+      const afterOk = /[\s，。！？、；：""''（）【】《》\n\r]/.test(after) || index + termToMatch.length === text.length;
+
+      // 如果前后都满足条件，或者是完全匹配，则认为是有效匹配
+      if (beforeOk || afterOk || (beforeOk && afterOk)) {
+        positions.push({
+          start: index,
+          end: index + termToMatch.length,
+          matchedText: termToMatch
+        });
+      }
+
+      index = text.indexOf(termToMatch, index + 1);
+    }
+  }
+
+  return positions;
+}
+
+/**
  * POST /api/v1/terms/match-text
- * 匹配文本中的知识库术语
+ * 匹配文本中的知识库术语（智能匹配：英文不区分大小写，中文词边界检测）
  */
 router.post('/match-text', asyncHandler(async (req: Request, res: Response) => {
   const { text } = req.body;
@@ -432,33 +492,21 @@ router.post('/match-text', asyncHandler(async (req: Request, res: Response) => {
     term: string;
     definition: string;
     category?: string;
-    positions: Array<{ start: number; end: number }>;
+    positions: Array<{ start: number; end: number; matchedText: string }>;
   }> = [];
 
   for (const term of allTerms) {
-    const positions: Array<{ start: number; end: number }> = [];
+    const positions: Array<{ start: number; end: number; matchedText: string }> = [];
 
-    // 匹配主术语
-    let index = text.indexOf(term.term);
-    while (index !== -1) {
-      positions.push({
-        start: index,
-        end: index + term.term.length
-      });
-      index = text.indexOf(term.term, index + 1);
-    }
+    // 🎯 智能匹配主术语
+    const mainMatches = smartMatchTerm(text, term.term);
+    positions.push(...mainMatches);
 
-    // 匹配同义词
+    // 🎯 智能匹配同义词
     if (term.synonyms && Array.isArray(term.synonyms)) {
       for (const synonym of term.synonyms) {
-        let synIndex = text.indexOf(synonym);
-        while (synIndex !== -1) {
-          positions.push({
-            start: synIndex,
-            end: synIndex + synonym.length
-          });
-          synIndex = text.indexOf(synonym, synIndex + 1);
-        }
+        const synMatches = smartMatchTerm(text, synonym);
+        positions.push(...synMatches);
       }
     }
 

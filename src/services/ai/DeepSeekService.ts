@@ -127,6 +127,58 @@ export class DeepSeekService extends EventEmitter {
     });
   }
 
+  // ============= 工具方法 =============
+
+  /**
+   * 🎯 智能匹配术语（支持英文不区分大小写，中文词边界检测）
+   */
+  private smartMatchTerm(text: string, termToMatch: string): boolean {
+    // 判断是否为纯英文术语
+    const isEnglishTerm = /^[a-zA-Z\s\-_]+$/.test(termToMatch);
+
+    if (isEnglishTerm) {
+      // 🎯 英文不区分大小写匹配
+      const lowerText = text.toLowerCase();
+      const lowerTerm = termToMatch.toLowerCase();
+
+      let index = lowerText.indexOf(lowerTerm);
+      while (index !== -1) {
+        // 检查词边界（前后是否为非字母字符）
+        const before = index > 0 ? text[index - 1] : ' ';
+        const after = index + termToMatch.length < text.length ? text[index + termToMatch.length] : ' ';
+
+        const isWordBoundary = !/[a-zA-Z]/.test(before) && !/[a-zA-Z]/.test(after);
+
+        if (isWordBoundary) {
+          return true; // 找到有效匹配
+        }
+
+        index = lowerText.indexOf(lowerTerm, index + 1);
+      }
+      return false;
+    } else {
+      // 🎯 中文或混合文本，精确匹配
+      let index = text.indexOf(termToMatch);
+      while (index !== -1) {
+        // 中文词边界检测：检查前后字符是否为标点或空格
+        const before = index > 0 ? text[index - 1] : ' ';
+        const after = index + termToMatch.length < text.length ? text[index + termToMatch.length] : ' ';
+
+        // 允许前后是空格、标点符号、或字符串开头/结尾
+        const beforeOk = /[\s，。！？、；：""''（）【】《》\n\r]/.test(before) || index === 0;
+        const afterOk = /[\s，。！？、；：""''（）【】《》\n\r]/.test(after) || index + termToMatch.length === text.length;
+
+        // 如果前后都满足条件，或者是完全匹配，则认为是有效匹配
+        if (beforeOk || afterOk || (beforeOk && afterOk)) {
+          return true; // 找到有效匹配
+        }
+
+        index = text.indexOf(termToMatch, index + 1);
+      }
+      return false;
+    }
+  }
+
   // ============= 基础聊天API =============
 
   /**
@@ -231,30 +283,40 @@ export class DeepSeekService extends EventEmitter {
     } = options;
 
     try {
-      // 🎯 先调用知识库API匹配术语
+      // 🎯 先调用知识库API匹配术语（使用智能匹配）
       let knowledgeTerms: Array<{ term: string; definition: string; category?: string }> = [];
       try {
         const { KnowledgeBaseDB } = await import('../../db/knowledgebase');
         const allTerms = KnowledgeBaseDB.getAll(1000, 0);
 
-        // 匹配转录文本中的术语
+        // 智能匹配转录文本中的术语
+        const matchedTermSet = new Set<string>(); // 用于去重
+
         allTerms.forEach(term => {
-          if (transcript.includes(term.term)) {
-            knowledgeTerms.push({
-              term: term.term,
-              definition: term.definition,
-              category: term.category
-            });
+          // 智能匹配主术语
+          if (this.smartMatchTerm(transcript, term.term)) {
+            if (!matchedTermSet.has(term.term)) {
+              matchedTermSet.add(term.term);
+              knowledgeTerms.push({
+                term: term.term,
+                definition: term.definition,
+                category: term.category
+              });
+            }
           }
-          // 也匹配同义词
+
+          // 智能匹配同义词
           if (term.synonyms && Array.isArray(term.synonyms)) {
             term.synonyms.forEach(synonym => {
-              if (transcript.includes(synonym)) {
-                knowledgeTerms.push({
-                  term: synonym,
-                  definition: term.definition,
-                  category: term.category
-                });
+              if (this.smartMatchTerm(transcript, synonym)) {
+                if (!matchedTermSet.has(synonym)) {
+                  matchedTermSet.add(synonym);
+                  knowledgeTerms.push({
+                    term: synonym,
+                    definition: term.definition,
+                    category: term.category
+                  });
+                }
               }
             });
           }
