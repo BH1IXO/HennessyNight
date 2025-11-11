@@ -328,7 +328,44 @@ class SummaryManager {
      * 格式化文本（保留换行）
      */
     formatText(text) {
-        return this.highlightKnowledgeTerms(this.escapeHtml(text)).replace(/\n/g, '<br>');
+        // 先转义HTML，再进行Markdown渲染和知识库术语高亮
+        return this.renderMarkdown(this.escapeHtml(text));
+    }
+
+    /**
+     * 🎯 渲染Markdown为HTML
+     */
+    renderMarkdown(text) {
+        let html = text;
+
+        // 1. 先处理知识库术语标记 [[术语]]
+        html = this.highlightKnowledgeTerms(html);
+
+        // 2. 处理标题 (### 标题)
+        html = html.replace(/^### (.+)$/gm, '<h4 style="color: #667eea; font-size: 16px; font-weight: 600; margin: 15px 0 10px 0;">$1</h4>');
+        html = html.replace(/^## (.+)$/gm, '<h3 style="color: #667eea; font-size: 18px; font-weight: 600; margin: 18px 0 12px 0;">$1</h3>');
+        html = html.replace(/^# (.+)$/gm, '<h2 style="color: #667eea; font-size: 20px; font-weight: 700; margin: 20px 0 15px 0;">$1</h2>');
+
+        // 3. 处理粗体 **文本**
+        html = html.replace(/\*\*(.+?)\*\*/g, '<strong style="color: #2d3748; font-weight: 600;">$1</strong>');
+
+        // 4. 处理斜体 *文本*
+        html = html.replace(/\*(.+?)\*/g, '<em style="color: #4a5568;">$1</em>');
+
+        // 5. 处理列表项 - 文本
+        html = html.replace(/^- (.+)$/gm, '<div style="padding-left: 20px; margin: 8px 0; position: relative;"><span style="position: absolute; left: 0; color: #667eea;">•</span> $1</div>');
+
+        // 6. 处理链接 [文本](URL)
+        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color: #667eea; text-decoration: underline;" target="_blank">$1</a>');
+
+        // 7. 处理代码块 `代码`
+        html = html.replace(/`([^`]+)`/g, '<code style="background: #f7fafc; padding: 2px 6px; border-radius: 4px; color: #e53e3e; font-family: monospace; font-size: 0.9em;">$1</code>');
+
+        // 8. 处理换行
+        html = html.replace(/\n\n/g, '<br><br>');
+        html = html.replace(/\n/g, '<br>');
+
+        return html;
     }
 
     /**
