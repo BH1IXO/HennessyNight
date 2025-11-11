@@ -74,9 +74,13 @@ class EmailApp {
             // });
 
             if (window.summaryManager && window.summaryManager.currentSummary) {
-                // console.log('📧 [Email] 发现会议纪要,准备更新邮件内容');
-                this.currentSummary = window.summaryManager.currentSummary;
-                this.updateEmailContent();
+                // 🎯 只有当会议纪要真正更新时才执行更新邮件内容
+                const newSummary = window.summaryManager.currentSummary;
+                if (this.currentSummary !== newSummary) {
+                    // console.log('📧 [Email] 发现会议纪要,准备更新邮件内容');
+                    this.currentSummary = newSummary;
+                    this.updateEmailContent();
+                }
             } else {
                 // console.log('📧 [Email] 尚未发现会议纪要');
             }
