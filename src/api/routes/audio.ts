@@ -764,8 +764,8 @@ router.post('/identify-speaker',
       }
       const referenceJson = JSON.stringify(referenceEmbeddings);
 
-      console.log(`[IdentifySpeaker] 使用多说话人识别模式`);
-      console.log(`[IdentifySpeaker] 阈值: 40% (适应音频质量差异)`);
+      console.log(`[IdentifySpeaker] 使用多说话人识别模式 (实时优化)`);
+      console.log(`[IdentifySpeaker] 阈值: 30%, 分块: 2秒 (快速响应说话人切换)`);
 
       const identifyMultiSpeaker = (): Promise<any> => {
         return new Promise((resolve, reject) => {
@@ -775,8 +775,8 @@ router.post('/identify-speaker',
             'identify_multi',
             processedAudioPath,
             referenceJson,
-            '0.40',  // threshold: 40%
-            '4.0',   // chunk_duration: 4秒
+            '0.30',  // threshold: 30% (降低以提高实时识别率)
+            '2.0',   // chunk_duration: 2秒 (减少延迟,更快响应说话人切换)
             'chinese',
             'cpu'
           ]);
@@ -850,10 +850,10 @@ router.post('/identify-speaker',
 
       // 🎯 阈值判断 (实时音频使用更宽松的阈值)
       // 注册声纹时音质好: 0.4-0.5
-      // 实时识别音质差: 0.30-0.35 (宽松)
-      const threshold = 0.32;  // 降低到32%以提高实时识别率
+      // 实时识别音质差: 0.30 (宽松,与chunk_duration=2秒配合)
+      const threshold = 0.30;  // 降低到30%以提高实时识别率,配合2秒分块
       console.log(`[IdentifySpeaker] ====================`);
-      console.log(`[IdentifySpeaker] 🎯 识别阈值: ${(threshold * 100).toFixed(0)}% (实时模式-宽松)`);
+      console.log(`[IdentifySpeaker] 🎯 识别阈值: ${(threshold * 100).toFixed(0)}% (实时模式-优化)`);
       console.log(`[IdentifySpeaker] 🏆 最高相似度: ${bestMatch ? bestMatch.name : '无'} - ${(bestSimilarity * 100).toFixed(2)}%`);
 
       if (bestMatch && bestSimilarity >= threshold) {
