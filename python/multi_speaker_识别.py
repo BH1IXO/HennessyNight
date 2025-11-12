@@ -20,9 +20,12 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # 设置标准输出为UTF-8编码
+# 注意: 不要重新包装sys.stdout/stderr,会导致退出时"I/O operation on closed file"错误
 if sys.platform == 'win32':
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    import codecs
+    # 使用codecs设置编码,而不是重新包装流
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 # 导入wespeaker服务
 import wespeaker_service

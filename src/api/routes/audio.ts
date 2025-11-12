@@ -447,7 +447,7 @@ router.post('/transcribe',
 
 /**
  * POST /api/v1/audio/transcribe-file
- * 转录整个音频文件（按断句分段 + 声纹识别）
+ * 转录整个音频文件（使用FunASR + WeSpeaker多说话人识别）
  */
 router.post('/transcribe-file',
   upload.single('audio'),
@@ -459,21 +459,10 @@ router.post('/transcribe-file',
     let audioFilePath = req.file.path;
     let convertedFilePath: string | null = null;
 
-    // 🔥 接收前端发送的说话人列表
-    let clientSpeakers: any[] = [];
-    if (req.body.speakers) {
-      try {
-        clientSpeakers = JSON.parse(req.body.speakers);
-        console.log(`[TranscribeFile] 收到前端发送的 ${clientSpeakers.length} 个说话人`);
-      } catch (e) {
-        console.warn('[TranscribeFile] 解析说话人列表失败', e);
-      }
-    }
-
     try {
       console.log(`[TranscribeFile] 开始处理音频文件: ${req.file.originalname}`);
 
-      // 检查是否需要转换音频格式
+      // 检查是否需要转换音频格式为16kHz单声道WAV
       const needsConversion = await audioConverter.needsConversion(audioFilePath);
       if (needsConversion) {
         console.log(`[TranscribeFile] 需要转换音频格式`);
@@ -484,226 +473,81 @@ router.post('/transcribe-file',
         console.log(`[TranscribeFile] 音频转换完成: ${convertedFilePath}`);
       }
 
+      // 加载已注册的声纹数据
+      const speakers = await speakerStorage.findAll();
+      console.log(`[TranscribeFile] 📋 加载了 ${speakers.length} 个已注册声纹`);
+
+      // 准备参考声纹JSON
+      const referenceEmbeddings: Record<string, number[]> = {};
+      for (const speaker of speakers) {
+        if (speaker.voiceprintData?.features && speaker.voiceprintData.features.length > 0) {
+          referenceEmbeddings[speaker.name] = speaker.voiceprintData.features;
+        }
+      }
+      const referenceJson = JSON.stringify(referenceEmbeddings);
+
       const { spawn } = require('child_process');
-      const pythonPath = 'python';
-      const scriptPath = path.join(process.cwd(), 'python', 'vosk_recognizer.py');
+      const pythonPath = path.join(process.cwd(), 'python', 'pyannote-env', 'Scripts', 'python.exe');
+      const scriptPath = path.join(process.cwd(), 'python', 'transcribe_with_speaker.py');
 
-      // 调用Python脚本进行语音识别
-      const pythonProcess = spawn(pythonPath, [scriptPath, 'file', audioFilePath]);
+      // 调用Python脚本进行转录+说话人识别
+      const pythonProcess = spawn(pythonPath, [
+        scriptPath,
+        audioFilePath,
+        referenceJson,
+        '0.40',  // threshold
+        'chinese',
+        'cpu'
+      ]);
 
-      let rawResults: any[] = [];
+      let stdout = '';
+      let stderr = '';
 
       pythonProcess.stdout.on('data', (data: Buffer) => {
-        const lines = data.toString().trim().split('\n');
-        lines.forEach(line => {
-          if (line.trim()) {
-            try {
-              const result = JSON.parse(line);
-              rawResults.push(result);
-            } catch (e) {
-              // 忽略无法解析的行
-            }
-          }
-        });
+        stdout += data.toString();
       });
 
       pythonProcess.stderr.on('data', (data: Buffer) => {
-        console.log(`[Vosk] ${data.toString()}`);
+        stderr += data.toString();
+        // 实时输出Python日志
+        const lines = stderr.trim().split('\n');
+        lines.forEach(line => {
+          if (line) console.log(`[TranscribeSpeaker/Python] ${line}`);
+        });
       });
 
       pythonProcess.on('close', async (code: number) => {
         if (code !== 0) {
+          console.error(`[TranscribeFile] Python进程退出,代码: ${code}`);
+          console.error(`[TranscribeFile] stderr:`, stderr);
           if (convertedFilePath) {
             await audioConverter.cleanupConvertedFile(convertedFilePath);
           }
-          res.status(500).json({ error: '转录失败', code });
+          res.status(500).json({ error: '转录失败', code, stderr });
           return;
         }
 
         try {
-          console.log(`[TranscribeFile] 转录完成，共 ${rawResults.length} 个结果片段`);
+          // 解析Python脚本返回的JSON结果
+          const result = JSON.parse(stdout);
 
-          // 🔥 从JSON文件读取声纹数据
-          console.log('[TranscribeFile] ====================');
-          console.log('[TranscribeFile] 📊 加载已注册声纹数据...');
-
-          const speakers = await speakerStorage.findAll();
-          console.log(`[TranscribeFile] 📋 从JSON加载了 ${speakers.length} 个已注册声纹`);
-
-          if (speakers.length > 0) {
-            console.log(`[TranscribeFile] 📋 声纹列表:`);
-            speakers.forEach((s: any, i: number) => {
-              const vpLength = s.voiceprintData?.features ? s.voiceprintData.features.length : 0;
-              const sampleCount = s.samples ? s.samples.length : 0;
-              console.log(`[TranscribeFile]   ${i + 1}. ${s.name} (${s.email}) - 向量:${vpLength}维, 样本数:${sampleCount}`);
-            });
-          }
-          console.log('[TranscribeFile] ====================');
-
-          // 🔥 使用WeSpeaker对整个音频文件进行声纹识别
-          let identifiedSpeaker: any = null;
-
-          if (speakers.length > 0) {
-            try {
-              console.log('[TranscribeFile] ====================');
-              console.log('[TranscribeFile] 🔍 使用WeSpeaker进行声纹识别...');
-
-              const { spawn: spawnWeSpeaker } = require('child_process');
-              const pythonPath = path.join(process.cwd(), 'python', 'pyannote-env', 'Scripts', 'python.exe');
-              const scriptPath = path.join(process.cwd(), 'python', 'wespeaker_service.py');
-
-              const extractFeatures = (): Promise<any> => {
-                return new Promise((resolve, reject) => {
-                  const pythonProcess = spawnWeSpeaker(pythonPath, [scriptPath, 'extract', audioFilePath, 'chinese', 'cpu']);
-
-                  let stdout = '';
-                  let stderr = '';
-
-                  pythonProcess.stdout.on('data', (data: Buffer) => {
-                    stdout += data.toString();
-                  });
-
-                  pythonProcess.stderr.on('data', (data: Buffer) => {
-                    stderr += data.toString();
-                  });
-
-                  pythonProcess.on('close', (code: number) => {
-                    if (code === 0) {
-                      try {
-                        const result = JSON.parse(stdout);
-                        resolve(result);
-                      } catch (e) {
-                        reject(new Error('Failed to parse WeSpeaker features'));
-                      }
-                    } else {
-                      reject(new Error(`WeSpeaker process exited with code ${code}: ${stderr}`));
-                    }
-                  });
-
-                  pythonProcess.on('error', (error: Error) => {
-                    reject(error);
-                  });
-                });
-              };
-
-              const result = await extractFeatures();
-
-              if (!result.success) {
-                throw new Error('Feature extraction failed');
-              }
-
-              const userEmbedding = result.embedding;
-              console.log(`[TranscribeFile] ====================`);
-              console.log(`[TranscribeFile] ✅ WeSpeaker特征提取完成: ${userEmbedding.length}维`);
-              console.log(`[TranscribeFile] 🔢 特征向量预览: [${userEmbedding.slice(0, 5).map((v: number) => v.toFixed(4)).join(', ')}...]`);
-              console.log(`[TranscribeFile] ====================`);
-              console.log(`[TranscribeFile] 🔍 开始声纹比对...`);
-
-              // 🔥 计算余弦相似度
-              const cosineSimilarity = (a: number[], b: number[]): number => {
-                if (a.length !== b.length) return 0;
-                let dotProduct = 0;
-                let normA = 0;
-                let normB = 0;
-                for (let i = 0; i < a.length; i++) {
-                  dotProduct += a[i] * b[i];
-                  normA += a[i] * a[i];
-                  normB += b[i] * b[i];
-                }
-                return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-              };
-
-              // 🔥 匹配说话人
-              let bestMatch: any = null;
-              let bestSimilarity = 0;
-
-              for (const speaker of speakers) {
-                if (!speaker.voiceprintData?.features || speaker.voiceprintData.features.length === 0) {
-                  console.log(`[TranscribeFile]   ⚠️ ${speaker.name}: 无声纹数据，跳过`);
-                  continue;
-                }
-
-                const similarity = cosineSimilarity(userEmbedding, speaker.voiceprintData.features);
-                console.log(`[TranscribeFile]   📊 ${speaker.name}: ${(similarity * 100).toFixed(2)}% (向量维度:${speaker.voiceprintData.features.length})`);
-
-                if (similarity > bestSimilarity) {
-                  bestSimilarity = similarity;
-                  bestMatch = speaker;
-                }
-              }
-
-              // 🔥 阈值判断 (实时音频使用更宽松的阈值)
-              const threshold = 0.32;  // 降低到32%以提高实时识别率
-              console.log(`[TranscribeFile] ====================`);
-              console.log(`[TranscribeFile] 🎯 识别阈值: ${(threshold * 100).toFixed(0)}% (实时模式-宽松)`);
-              console.log(`[TranscribeFile] 🏆 最高相似度: ${bestMatch ? bestMatch.name : '无'} - ${(bestSimilarity * 100).toFixed(2)}%`);
-
-              if (bestMatch && bestSimilarity >= threshold) {
-                console.log(`[TranscribeFile] ✅ 识别成功: ${bestMatch.name} (${(bestSimilarity * 100).toFixed(2)}%)`);
-                console.log(`[TranscribeFile] ====================`);
-                identifiedSpeaker = {
-                  name: bestMatch.name,
-                  confidence: bestSimilarity
-                };
-              } else {
-                console.log(`[TranscribeFile] ❌ 未匹配到说话人 (最高相似度: ${(bestSimilarity * 100).toFixed(2)}% < 阈值${(threshold * 100).toFixed(0)}%)`);
-                console.log(`[TranscribeFile] ====================`);
-                identifiedSpeaker = {
-                  name: '未识别说话人',
-                  confidence: bestSimilarity
-                };
-              }
-
-            } catch (error) {
-              console.error('[TranscribeFile] 声纹识别失败:', error);
-              identifiedSpeaker = {
-                name: '未识别说话人',
-                confidence: 0
-              };
-            }
-          } else {
-            console.log('[TranscribeFile] ⚠️ 没有已注册的声纹');
-            identifiedSpeaker = {
-              name: '未识别说话人',
-              confidence: 0
-            };
+          if (!result.success) {
+            throw new Error(result.error || 'Transcription failed');
           }
 
-          // 按断句处理转录结果 (使用整个音频文件的声纹识别结果)
-          const segments: any[] = [];
-          let currentSegment = '';
-          let segmentStartTime = 0;
+          console.log(`[TranscribeFile] 转录完成，共 ${result.segments.length} 个分段`);
 
-          for (let i = 0; i < rawResults.length; i++) {
-            const result = rawResults[i];
-            const text = result.text || '';
+          // Python脚本已经完成了转录和说话人识别,直接使用结果
+          // 格式化segments以匹配前端期望的格式
+          const segments = result.segments.map((seg: any) => ({
+            text: seg.text,
+            speaker: seg.speaker,
+            timestamp: new Date(seg.start * 1000).toLocaleTimeString(),
+            startTime: seg.start,
+            endTime: seg.end
+          }));
 
-            if (!text.trim()) continue;
-
-            currentSegment += text + ' ';
-
-            // 检测断句（句号、问号、感叹号、逗号等）
-            const shouldBreak = /[。？！，、；：\.\?!,;:]$/.test(text.trim()) ||
-                                currentSegment.length > 200 ||
-                                i === rawResults.length - 1;
-
-            if (shouldBreak && currentSegment.trim()) {
-              // 添加到segments (所有片段使用同一个说话人,因为是对整个音频文件识别的)
-              segments.push({
-                text: currentSegment.trim(),
-                speaker: identifiedSpeaker || { name: '未识别说话人', confidence: 0 },
-                timestamp: new Date().toLocaleTimeString(),
-                startTime: segmentStartTime,
-                endTime: i
-              });
-
-              // 重置
-              currentSegment = '';
-              segmentStartTime = i + 1;
-            }
-          }
-
-          console.log(`[TranscribeFile] 处理完成，共 ${segments.length} 个断句片段`);
+          console.log(`[TranscribeFile] 处理完成，共 ${segments.length} 个分段`);
 
           // 清理临时文件
           if (convertedFilePath) {
@@ -715,7 +559,7 @@ router.post('/transcribe-file',
             data: {
               segments,
               totalSegments: segments.length,
-              totalDuration: rawResults.length
+              fullText: result.full_text || ''
             }
           });
 
