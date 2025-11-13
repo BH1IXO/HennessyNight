@@ -13,6 +13,10 @@ from pathlib import Path
 import warnings
 warnings.filterwarnings('ignore')
 
+# 重定向所有warnings和非关键输出到stderr
+import logging
+logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
+
 # 设置标准输出为UTF-8编码
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -216,7 +220,7 @@ def main():
         python transcribe_with_speaker.py <audio_file> <reference_json> [threshold] [model_type] [device]
     """
     if len(sys.argv) < 3:
-        print("Usage: python transcribe_with_speaker.py <audio_file> <reference_json> [threshold] [model_type] [device]")
+        print("Usage: python transcribe_with_speaker.py <audio_file> <reference_json> [threshold] [model_type] [device]", file=sys.stderr)
         return 1
 
     audio_path = sys.argv[1]
@@ -226,6 +230,11 @@ def main():
     device = sys.argv[5] if len(sys.argv) > 5 else 'cpu'
 
     try:
+        # 临时保存stdout,重定向到null以避免库的输出污染JSON
+        original_stdout = sys.stdout
+        import io
+        sys.stdout = io.StringIO()
+
         result = transcribe_with_speaker_identification(
             audio_path,
             reference_json,
@@ -233,15 +242,24 @@ def main():
             model_type=model_type,
             device=device
         )
-        print(json.dumps(result, ensure_ascii=False))
+
+        # 恢复stdout并输出JSON结果
+        sys.stdout = original_stdout
+        print(json.dumps(result, ensure_ascii=False), flush=True)
         return 0
 
     except Exception as e:
+        # 恢复stdout
+        try:
+            sys.stdout = original_stdout
+        except:
+            pass
+
         error_result = {
             'success': False,
             'error': str(e)
         }
-        print(json.dumps(error_result, ensure_ascii=False))
+        print(json.dumps(error_result, ensure_ascii=False), flush=True)
         return 1
 
 
