@@ -447,7 +447,7 @@ router.post('/transcribe',
 
 /**
  * POST /api/v1/audio/transcribe-file
- * 转录整个音频文件（使用FunASR + WeSpeaker多说话人识别）
+ * 转录整个音频文件（临时使用Vosk避免内存问题）
  */
 router.post('/transcribe-file',
   upload.single('audio'),
@@ -473,32 +473,14 @@ router.post('/transcribe-file',
         console.log(`[TranscribeFile] 音频转换完成: ${convertedFilePath}`);
       }
 
-      // 加载已注册的声纹数据
-      const speakers = await speakerStorage.findAll();
-      console.log(`[TranscribeFile] 📋 加载了 ${speakers.length} 个已注册声纹`);
-
-      // 准备参考声纹JSON
-      const referenceEmbeddings: Record<string, number[]> = {};
-      for (const speaker of speakers) {
-        if (speaker.voiceprintData?.features && speaker.voiceprintData.features.length > 0) {
-          referenceEmbeddings[speaker.name] = speaker.voiceprintData.features;
-        }
-      }
-      const referenceJson = JSON.stringify(referenceEmbeddings);
+      console.log(`[TranscribeFile] 使用Vosk进行转录(避免FunASR内存问题)`);
 
       const { spawn } = require('child_process');
-      const pythonPath = path.join(process.cwd(), 'python', 'pyannote-env', 'Scripts', 'python.exe');
-      const scriptPath = path.join(process.cwd(), 'python', 'transcribe_with_speaker.py');
+      const pythonPath = 'python'; // 使用系统Python
+      const scriptPath = path.join(process.cwd(), 'python', 'vosk_recognizer.py');
 
-      // 调用Python脚本进行转录+说话人识别
-      const pythonProcess = spawn(pythonPath, [
-        scriptPath,
-        audioFilePath,
-        referenceJson,
-        '0.40',  // threshold
-        'chinese',
-        'cpu'
-      ]);
+      // 使用Vosk进行简单转录
+      const pythonProcess = spawn(pythonPath, [scriptPath, 'file', audioFilePath]);
 
       let stdout = '';
       let stderr = '';
@@ -508,11 +490,12 @@ router.post('/transcribe-file',
       });
 
       pythonProcess.stderr.on('data', (data: Buffer) => {
-        stderr += data.toString();
+        const chunk = data.toString();
+        stderr += chunk;
         // 实时输出Python日志
-        const lines = stderr.trim().split('\n');
+        const lines = chunk.trim().split('\n');
         lines.forEach(line => {
-          if (line) console.log(`[TranscribeSpeaker/Python] ${line}`);
+          if (line) console.log(`[Vosk/Python] ${line}`);
         });
       });
 

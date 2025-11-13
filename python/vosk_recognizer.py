@@ -38,6 +38,8 @@ def recognize_from_file(audio_file, sample_rate=16000):
     rec.SetWords(True)  # 启用词级别的时间戳
 
     results = []
+    all_segments = []
+    full_text_parts = []
 
     try:
         with wave.open(audio_file, "rb") as wf:
@@ -60,29 +62,66 @@ def recognize_from_file(audio_file, sample_rate=16000):
                     # 完整的句子识别完成
                     result = json.loads(rec.Result())
                     if result.get("text"):
+                        text = result["text"]
+                        words = result.get("result", [])
+
+                        # 计算该段的时间范围
+                        start_time = words[0]["start"] if words else 0
+                        end_time = words[-1]["end"] if words else 0
+
                         results.append({
                             "type": "final",
-                            "text": result["text"],
-                            "words": result.get("result", [])
+                            "text": text,
+                            "words": words
                         })
-                        # 实时输出
-                        print(json.dumps({"type": "final", "text": result["text"]}, ensure_ascii=False))
+
+                        all_segments.append({
+                            "text": text,
+                            "start": start_time,
+                            "end": end_time,
+                            "speaker": {"name": "未识别", "confidence": 0}
+                        })
+
+                        full_text_parts.append(text)
+
+                        # 实时日志
+                        print(f"[Vosk] 识别片段: {text} ({start_time:.2f}s - {end_time:.2f}s)", file=sys.stderr)
 
             # 获取最后的部分结果
             final_result = json.loads(rec.FinalResult())
             if final_result.get("text"):
+                text = final_result["text"]
+                words = final_result.get("result", [])
+
+                start_time = words[0]["start"] if words else 0
+                end_time = words[-1]["end"] if words else 0
+
                 results.append({
                     "type": "final",
-                    "text": final_result["text"],
-                    "words": final_result.get("result", [])
+                    "text": text,
+                    "words": words
                 })
-                print(json.dumps({"type": "final", "text": final_result["text"]}, ensure_ascii=False))
 
-        return {"success": True, "results": results}
+                all_segments.append({
+                    "text": text,
+                    "start": start_time,
+                    "end": end_time,
+                    "speaker": {"name": "未识别", "confidence": 0}
+                })
+
+                full_text_parts.append(text)
+
+                print(f"[Vosk] 识别片段: {text} ({start_time:.2f}s - {end_time:.2f}s)", file=sys.stderr)
+
+        return {
+            "success": True,
+            "segments": all_segments,
+            "full_text": "".join(full_text_parts)
+        }
 
     except Exception as e:
         print(f"[ERROR] 识别失败: {str(e)}", file=sys.stderr)
-        return {"error": str(e)}
+        return {"success": False, "error": str(e)}
 
 
 def recognize_from_stream(sample_rate=16000):
@@ -160,6 +199,10 @@ if __name__ == "__main__":
             sys.exit(1)
 
         result = recognize_from_file(audio_file)
+
+        # 输出最终JSON结果到stdout
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+
         if "error" in result:
             sys.exit(1)
     else:
