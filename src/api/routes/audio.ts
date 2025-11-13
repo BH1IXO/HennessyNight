@@ -473,14 +473,21 @@ router.post('/transcribe-file',
         console.log(`[TranscribeFile] 音频转换完成: ${convertedFilePath}`);
       }
 
-      console.log(`[TranscribeFile] 使用Vosk进行转录(避免FunASR内存问题)`);
+      console.log(`[TranscribeFile] 使用FunASR进行转录(不做说话人识别)`);
 
       const { spawn } = require('child_process');
-      const pythonPath = 'python'; // 使用系统Python
-      const scriptPath = path.join(process.cwd(), 'python', 'vosk_recognizer.py');
+      const pythonPath = path.join(process.cwd(), 'python', 'pyannote-env', 'Scripts', 'python.exe');
+      const scriptPath = path.join(process.cwd(), 'python', 'funasr_service.py');
 
-      // 使用Vosk进行简单转录
-      const pythonProcess = spawn(pythonPath, [scriptPath, 'file', audioFilePath]);
+      // 使用FunASR进行简单转录,不加载WeSpeaker
+      const pythonProcess = spawn(pythonPath, [
+        scriptPath,
+        'file',
+        audioFilePath,
+        'zh',      // 语言
+        'offline', // 模式
+        'cpu'      // 设备
+      ]);
 
       let stdout = '';
       let stderr = '';
@@ -495,7 +502,7 @@ router.post('/transcribe-file',
         // 实时输出Python日志
         const lines = chunk.trim().split('\n');
         lines.forEach(line => {
-          if (line) console.log(`[Vosk/Python] ${line}`);
+          if (line) console.log(`[FunASR/Python] ${line}`);
         });
       });
 
@@ -518,13 +525,13 @@ router.post('/transcribe-file',
             throw new Error(result.error || 'Transcription failed');
           }
 
-          console.log(`[TranscribeFile] 转录完成，共 ${result.segments.length} 个分段`);
+          console.log(`[TranscribeFile] 转录完成，共 ${result.segments?.length || 0} 个分段`);
 
-          // Python脚本已经完成了转录和说话人识别,直接使用结果
+          // FunASR只做转录,不做说话人识别
           // 格式化segments以匹配前端期望的格式
-          const segments = result.segments.map((seg: any) => ({
+          const segments = (result.segments || []).map((seg: any) => ({
             text: seg.text,
-            speaker: seg.speaker,
+            speaker: { name: '未识别', confidence: 0 },  // FunASR不提供说话人信息
             timestamp: new Date(seg.start * 1000).toLocaleTimeString(),
             startTime: seg.start,
             endTime: seg.end
