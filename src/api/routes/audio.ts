@@ -447,7 +447,7 @@ router.post('/transcribe',
 
 /**
  * POST /api/v1/audio/transcribe-file
- * 转录整个音频文件（临时使用Vosk避免内存问题）
+ * 转录整个音频文件（使用阿里云ASR服务）
  */
 router.post('/transcribe-file',
   upload.single('audio'),
@@ -473,111 +473,43 @@ router.post('/transcribe-file',
         console.log(`[TranscribeFile] 音频转换完成: ${convertedFilePath}`);
       }
 
-      console.log(`[TranscribeFile] 使用FunASR进行转录(不做说话人识别)`);
+      console.log(`[TranscribeFile] 使用阿里云ASR进行转录`);
 
-      const { spawn } = require('child_process');
-      const pythonPath = path.join(process.cwd(), 'python', 'pyannote-env', 'Scripts', 'python.exe');
-      const scriptPath = path.join(process.cwd(), 'python', 'funasr_service.py');
+      // 使用阿里云ASR服务
+      const { getAliyunASRService } = require('../../services/asr/AliyunASRService');
+      const aliyunASR = getAliyunASRService();
 
-      // 使用FunASR进行简单转录,不加载WeSpeaker
-      const pythonProcess = spawn(pythonPath, [
-        scriptPath,
-        'file',
-        audioFilePath,
-        'zh',      // 语言
-        'offline', // 模式
-        'cpu'      // 设备
-      ]);
+      const result = await aliyunASR.transcribeFile(audioFilePath);
 
-      let stdout = '';
-      let stderr = '';
+      if (!result.success) {
+        throw new Error(result.error || '阿里云ASR转录失败');
+      }
 
-      pythonProcess.stdout.on('data', (data: Buffer) => {
-        stdout += data.toString();
-      });
+      console.log(`[TranscribeFile] 转录完成，共 ${result.segments?.length || 0} 个分段`);
 
-      pythonProcess.stderr.on('data', (data: Buffer) => {
-        const chunk = data.toString();
-        stderr += chunk;
-        // 实时输出Python日志
-        const lines = chunk.trim().split('\n');
-        lines.forEach(line => {
-          if (line) console.log(`[FunASR/Python] ${line}`);
-        });
-      });
+      // 格式化segments以匹配前端期望的格式
+      const segments = (result.segments || []).map((seg: any) => ({
+        text: seg.text,
+        speaker: seg.speaker || { name: '未识别', confidence: 0 },
+        timestamp: new Date(seg.start * 1000).toLocaleTimeString(),
+        startTime: seg.start,
+        endTime: seg.end
+      }));
 
-      pythonProcess.on('close', async (code: number) => {
-        if (code !== 0) {
-          console.error(`[TranscribeFile] Python进程退出,代码: ${code}`);
-          console.error(`[TranscribeFile] stderr:`, stderr);
-          if (convertedFilePath) {
-            await audioConverter.cleanupConvertedFile(convertedFilePath);
-          }
-          res.status(500).json({ error: '转录失败', code, stderr });
-          return;
+      console.log(`[TranscribeFile] 处理完成，共 ${segments.length} 个分段`);
+
+      // 清理临时文件
+      if (convertedFilePath) {
+        await audioConverter.cleanupConvertedFile(convertedFilePath);
+      }
+
+      res.json({
+        message: '转录成功',
+        data: {
+          segments,
+          totalSegments: segments.length,
+          fullText: result.text || ''
         }
-
-        try {
-          // 解析Python脚本返回的JSON结果
-          const result = JSON.parse(stdout);
-
-          if (!result.success) {
-            throw new Error(result.error || 'Transcription failed');
-          }
-
-          console.log(`[TranscribeFile] 转录完成，共 ${result.segments?.length || 0} 个分段`);
-
-          // FunASR只做转录,不做说话人识别
-          // 格式化segments以匹配前端期望的格式
-          const segments = (result.segments || []).map((seg: any) => ({
-            text: seg.text,
-            speaker: { name: '未识别', confidence: 0 },  // FunASR不提供说话人信息
-            timestamp: new Date(seg.start * 1000).toLocaleTimeString(),
-            startTime: seg.start,
-            endTime: seg.end
-          }));
-
-          console.log(`[TranscribeFile] 处理完成，共 ${segments.length} 个分段`);
-
-          // 清理临时文件
-          if (convertedFilePath) {
-            await audioConverter.cleanupConvertedFile(convertedFilePath);
-          }
-
-          res.json({
-            message: '转录成功',
-            data: {
-              segments,
-              totalSegments: segments.length,
-              fullText: result.full_text || ''
-            }
-          });
-
-        } catch (error: any) {
-          console.error('[TranscribeFile] 处理失败:', error);
-
-          if (convertedFilePath) {
-            await audioConverter.cleanupConvertedFile(convertedFilePath);
-          }
-
-          res.status(500).json({
-            error: '处理失败',
-            message: error.message
-          });
-        }
-      });
-
-      pythonProcess.on('error', async (error: Error) => {
-        console.error('[TranscribeFile] Python进程错误:', error);
-
-        if (convertedFilePath) {
-          await audioConverter.cleanupConvertedFile(convertedFilePath);
-        }
-
-        res.status(500).json({
-          error: '转录失败',
-          message: error.message
-        });
       });
 
     } catch (error: any) {
