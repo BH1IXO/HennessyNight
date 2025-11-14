@@ -290,24 +290,26 @@ class EmailApp {
             title = this.stripMarkdown(summary.metadata.title);
         }
 
-        // 🎯 获取会议日期和时间
+        // 🎯 获取会议日期
         let dateTimeStr = '';
         if (summary.date) {
             dateTimeStr = summary.date;  // 已经是格式化后的日期字符串
         } else if (summary.meetingDate) {
-            // 如果是Date对象，格式化为包含时间的字符串
+            // 如果是Date对象，格式化为日期字符串（只显示日期，不含时间）
             const date = summary.meetingDate instanceof Date
                 ? summary.meetingDate
                 : new Date(summary.meetingDate);
-            dateTimeStr = date.toLocaleString('zh-CN', {
+            dateTimeStr = date.toLocaleDateString('zh-CN', {
                 year: 'numeric',
                 month: '2-digit',
-                day: '2-digit',
-                hour: '2-digit',
-                minute: '2-digit'
-            });
+                day: '2-digit'
+            }).replace(/\//g, '-'); // 将 2025/11/14 格式转为 2025-11-14
         } else {
-            dateTimeStr = new Date().toLocaleDateString('zh-CN');
+            dateTimeStr = new Date().toLocaleDateString('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit'
+            }).replace(/\//g, '-');
         }
 
         // 🎯 组合标题：会议标题 - 日期时间
@@ -461,33 +463,34 @@ class EmailApp {
         `;
 
         // 会议基本信息
-        if (summary.metadata || summary.attendees) {
+        html += `
+            <div style="margin-bottom: 25px; padding: 20px; background: #f8f9fa; border-left: 4px solid #4361ee; border-radius: 5px;">
+                <h3 style="margin: 0 0 15px 0; color: #4361ee; font-size: 18px;">
+                    <i class="fas fa-info-circle"></i> 会议基本信息
+                </h3>
+                <p style="margin: 8px 0;">
+                    <strong><i class="fas fa-calendar-alt"></i> 会议日期：</strong>${date}
+                </p>
+        `;
+
+        if (summary.duration) {
             html += `
-                <div style="margin-bottom: 25px; padding: 20px; background: #f8f9fa; border-left: 4px solid #4361ee; border-radius: 5px;">
-                    <h3 style="margin: 0 0 15px 0; color: #4361ee; font-size: 18px;">
-                        <i class="fas fa-info-circle"></i> 会议信息
-                    </h3>
+                <p style="margin: 8px 0;">
+                    <strong><i class="fas fa-clock"></i> 会议时长：</strong>${summary.duration}
+                </p>
             `;
-
-            if (summary.attendees && summary.attendees.length > 0) {
-                const attendeesList = summary.attendees.join('、');
-                html += `
-                    <p style="margin: 8px 0;">
-                        <strong><i class="fas fa-users"></i> 参会人员：</strong>${attendeesList}
-                    </p>
-                `;
-            }
-
-            if (summary.metadata && summary.metadata.duration) {
-                html += `
-                    <p style="margin: 8px 0;">
-                        <strong><i class="fas fa-clock"></i> 会议时长：</strong>${summary.metadata.duration}
-                    </p>
-                `;
-            }
-
-            html += `</div>`;
         }
+
+        if (summary.attendees && summary.attendees.length > 0) {
+            const attendeesList = summary.attendees.join('、');
+            html += `
+                <p style="margin: 8px 0;">
+                    <strong><i class="fas fa-users"></i> 参会人员：</strong>${attendeesList}
+                </p>
+            `;
+        }
+
+        html += `</div>`;
 
         // 会议概要
         if (summary.summary) {

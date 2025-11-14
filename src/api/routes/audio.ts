@@ -487,8 +487,81 @@ router.post('/transcribe-file',
 
       console.log(`[TranscribeFile] 转录完成，共 ${result.segments?.length || 0} 个分段`);
 
+      // 调用WeSpeaker进行声纹识别
+      console.log(`[TranscribeFile] 开始声纹识别...`);
+      let segments = result.segments || [];
+
+      try {
+        console.log(`[TranscribeFile] 🔍 开始加载WeSpeaker和说话人档案...`);
+
+        const { WeSpeakerVoiceprintProvider } = require('../../services/providers/voiceprint/WeSpeakerVoiceprint');
+
+        console.log(`[TranscribeFile] ✅ WeSpeaker模块加载成功`);
+
+        // 创建WeSpeaker provider实例
+        const wespeaker = new WeSpeakerVoiceprintProvider({
+          modelType: 'chinese',
+          threshold: 0.50,
+          device: 'cpu'
+        });
+
+        console.log(`[TranscribeFile] ✅ WeSpeaker实例创建成功`);
+
+        // 加载所有已注册的说话人（使用顶部已导入的speakerStorage）
+        console.log(`[TranscribeFile] 正在加载说话人档案...`);
+        const allSpeakers = await speakerStorage.findAll();
+        console.log(`[TranscribeFile] ✅ findAll()调用成功`);
+
+
+        console.log(`[TranscribeFile] 数据库中共有 ${allSpeakers.length} 个说话人档案`);
+
+        // 将所有说话人的声纹档案直接加载到WeSpeaker的profiles Map中
+        for (const speaker of allSpeakers) {
+          if (speaker.voiceprintData && speaker.voiceprintData.features) {
+            // 直接设置profile（绕过enrollProfile，因为我们已经有embedding了）
+            wespeaker['profiles'].set(speaker.id, {
+              profileId: speaker.id,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+              metadata: {
+                embedding: speaker.voiceprintData.features,
+                model: 'chinese',
+                device: 'cpu'
+              }
+            });
+            console.log(`[TranscribeFile] 已加载声纹档案: ${speaker.name} (${speaker.id})`);
+          }
+        }
+
+        // 读取音频文件
+        const audioBuffer = await fs.readFile(audioFilePath);
+
+        // 调用identifyProfile进行1:N识别（不传candidateProfileIds，使用所有已加载的profiles）
+        const speakerResult = await wespeaker.identifyProfile(audioBuffer);
+
+        if (speakerResult.success && speakerResult.identified && speakerResult.profileId) {
+          console.log(`[TranscribeFile] ✅ 声纹识别成功: ${speakerResult.profileId} (置信度: ${speakerResult.confidence})`);
+
+          // 将识别到的说话人应用到所有segments
+          segments = segments.map((seg: any) => ({
+            ...seg,
+            speaker: {
+              name: speakerResult.profileId,
+              confidence: speakerResult.confidence || 0
+            }
+          }));
+        } else {
+          console.log(`[TranscribeFile] ⚠️ 声纹识别未匹配到已知说话人`);
+        }
+      } catch (speakerError: any) {
+        console.error(`[TranscribeFile] ❌ 声纹识别失败:`);
+        console.error(`[TranscribeFile] 错误信息: ${speakerError.message}`);
+        console.error(`[TranscribeFile] 错误堆栈: ${speakerError.stack}`);
+        // 声纹识别失败不影响转录结果,继续处理
+      }
+
       // 格式化segments以匹配前端期望的格式
-      const segments = (result.segments || []).map((seg: any) => ({
+      const formattedSegments = segments.map((seg: any) => ({
         text: seg.text,
         speaker: seg.speaker || { name: '未识别', confidence: 0 },
         timestamp: new Date(seg.start * 1000).toLocaleTimeString(),
@@ -496,7 +569,7 @@ router.post('/transcribe-file',
         endTime: seg.end
       }));
 
-      console.log(`[TranscribeFile] 处理完成，共 ${segments.length} 个分段`);
+      console.log(`[TranscribeFile] 处理完成，共 ${formattedSegments.length} 个分段`);
 
       // 清理临时文件
       if (convertedFilePath) {
@@ -506,8 +579,8 @@ router.post('/transcribe-file',
       res.json({
         message: '转录成功',
         data: {
-          segments,
-          totalSegments: segments.length,
+          segments: formattedSegments,
+          totalSegments: formattedSegments.length,
           fullText: result.text || ''
         }
       });
@@ -687,7 +760,7 @@ router.post('/identify-speaker',
       const referenceJson = JSON.stringify(referenceEmbeddings);
 
       console.log(`[IdentifySpeaker] 使用多说话人识别模式 (实时优化)`);
-      console.log(`[IdentifySpeaker] 阈值: 30%, 分块: 2秒 (快速响应说话人切换)`);
+      console.log(`[IdentifySpeaker] 阈值: 55%, 分块: 1.5秒 (严格匹配,减少误识别)`);
 
       const identifyMultiSpeaker = (): Promise<any> => {
         return new Promise((resolve, reject) => {
@@ -697,8 +770,8 @@ router.post('/identify-speaker',
             'identify_multi',
             processedAudioPath,
             referenceJson,
-            '0.30',  // threshold: 30% (降低以提高实时识别率)
-            '2.0',   // chunk_duration: 2秒 (减少延迟,更快响应说话人切换)
+            '0.55',  // threshold: 55% (严格匹配,显著减少误识别)
+            '1.5',   // chunk_duration: 1.5秒 (快速响应,获取足够声纹特征)
             'chinese',
             'cpu'
           ]);

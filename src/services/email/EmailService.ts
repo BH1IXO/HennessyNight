@@ -113,6 +113,62 @@ export class EmailService {
   }
 
   /**
+   * 将Markdown文本转换为HTML
+   */
+  private convertMarkdownToHTML(text: string): string {
+    if (!text) return '';
+
+    let html = text;
+
+    // 1. 先处理代码块(避免被其他规则干扰)
+    html = html.replace(/```([\s\S]*?)```/g, '<pre style="background: #f7fafc; padding: 12px; border-radius: 6px; overflow-x: auto; border-left: 3px solid #667eea;"><code>$1</code></pre>');
+
+    // 2. 处理行内代码
+    html = html.replace(/`([^`]+)`/g, '<code style="background: #f7fafc; padding: 2px 6px; border-radius: 3px; font-family: monospace; color: #e53e3e;">$1</code>');
+
+    // 3. 处理标题(从大到小,避免误匹配)
+    html = html.replace(/^###\s+(.+)$/gm, '<h3 style="color: #2d3748; margin-top: 15px; margin-bottom: 10px; font-size: 16px;">$1</h3>');
+    html = html.replace(/^##\s+(.+)$/gm, '<h2 style="color: #2d3748; margin-top: 20px; margin-bottom: 12px; font-size: 18px;">$1</h2>');
+    html = html.replace(/^#\s+(.+)$/gm, '<h1 style="color: #2d3748; margin-top: 25px; margin-bottom: 15px; font-size: 20px;">$1</h1>');
+
+    // 4. 处理加粗(必须在斜体之前)
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong style="font-weight: 600;">$1</strong>');
+    html = html.replace(/__(.+?)__/g, '<strong style="font-weight: 600;">$1</strong>');
+
+    // 5. 处理斜体
+    html = html.replace(/(?<!\*)\*([^*\n]+?)\*(?!\*)/g, '<em>$1</em>');
+    html = html.replace(/(?<!_)_([^_\n]+?)_(?!_)/g, '<em>$1</em>');
+
+    // 6. 处理链接
+    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color: #667eea; text-decoration: none;">$1</a>');
+
+    // 7. 处理无序列表
+    html = html.replace(/^[\-\*]\s+(.+)$/gm, '<li style="margin: 5px 0;">$1</li>');
+
+    // 8. 处理有序列表
+    html = html.replace(/^\d+\.\s+(.+)$/gm, '<li style="margin: 5px 0;">$1</li>');
+
+    // 9. 包装连续的列表项
+    html = html.replace(/(<li[^>]*>.*?<\/li>\s*)+/gs, match => {
+      // 检查是否有编号(有序列表)
+      const hasNumbers = /^\d+\.\s/.test(text);
+      const tag = hasNumbers ? 'ol' : 'ul';
+      return `<${tag} style="margin: 10px 0; padding-left: 25px; line-height: 1.8;">${match}</${tag}>`;
+    });
+
+    // 10. 处理段落换行
+    html = html.replace(/\n\n+/g, '</p><p style="margin: 8px 0; line-height: 1.8;">');
+    html = html.replace(/\n/g, '<br>');
+
+    // 11. 包装在段落中(如果还没有HTML标签)
+    if (!html.match(/^<(h\d|p|ul|ol|pre|div)/)) {
+      html = '<p style="margin: 8px 0; line-height: 1.8;">' + html + '</p>';
+    }
+
+    return html;
+  }
+
+  /**
    * 生成会议纪要HTML内容
    */
   private generateMeetingSummaryHTML(summary: MeetingSummary, meetingDate?: string): string {
@@ -375,6 +431,19 @@ export class EmailService {
     </div>
 
     <div class="email-body">
+      <!-- 会议基本信息 -->
+      <div class="section">
+        <div class="section-title">
+          <span class="section-icon">ℹ️</span>
+          会议基本信息
+        </div>
+        <div style="line-height: 2.0; color: #4a5568;">
+          <div><strong style="color: #2d3748;">📅 会议日期:</strong> ${displayDate}</div>
+          ${summary.duration ? `<div><strong style="color: #2d3748;">⏱️ 会议时长:</strong> ${summary.duration}</div>` : ''}
+          <div><strong style="color: #2d3748;">📧 发件人:</strong> ${this.config.from}</div>
+        </div>
+      </div>
+
       ${summary.attendees && summary.attendees.length > 0 ? `
       <div class="section">
         <div class="section-title">
@@ -393,7 +462,7 @@ export class EmailService {
           <span class="section-icon">📋</span>
           会议摘要
         </div>
-        <div class="summary-text">${summary.summary.replace(/\n/g, '<br>')}</div>
+        <div class="summary-text">${this.convertMarkdownToHTML(summary.summary)}</div>
       </div>
       ` : ''}
 
@@ -404,7 +473,7 @@ export class EmailService {
           关键讨论点
         </div>
         <ul class="key-points">
-          ${summary.keyPoints.map(point => `<li>${point}</li>`).join('')}
+          ${summary.keyPoints.map(point => `<li>${this.convertMarkdownToHTML(point)}</li>`).join('')}
         </ul>
       </div>
       ` : ''}
@@ -416,7 +485,7 @@ export class EmailService {
           决策事项
         </div>
         <ul class="decisions">
-          ${summary.decisions.map(decision => `<li>${decision}</li>`).join('')}
+          ${summary.decisions.map(decision => `<li>${this.convertMarkdownToHTML(decision)}</li>`).join('')}
         </ul>
       </div>
       ` : ''}
@@ -430,7 +499,7 @@ export class EmailService {
         <div class="action-items">
           ${summary.actionItems.map(item => `
             <div class="action-item">
-              <div class="action-task">📍 ${item.task}</div>
+              <div class="action-task">📍 ${this.convertMarkdownToHTML(item.task)}</div>
               <div class="action-meta">
                 ${item.assignee ? `<span>👤 负责人: ${item.assignee}</span>` : ''}
                 ${item.deadline ? `<span>📅 截止日期: ${item.deadline}</span>` : ''}
@@ -449,7 +518,7 @@ export class EmailService {
           下一步计划
         </div>
         <ul class="next-steps">
-          ${summary.nextSteps.map(step => `<li>${step}</li>`).join('')}
+          ${summary.nextSteps.map(step => `<li>${this.convertMarkdownToHTML(step)}</li>`).join('')}
         </ul>
       </div>
       ` : ''}
