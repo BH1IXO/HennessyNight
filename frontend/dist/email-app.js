@@ -469,7 +469,7 @@ class EmailApp {
                     <i class="fas fa-info-circle"></i> 会议基本信息
                 </h3>
                 <p style="margin: 8px 0;">
-                    <strong><i class="fas fa-calendar-alt"></i> 会议日期：</strong>${date}
+                    <strong><i class="fas fa-calendar"></i> 会议日期：</strong>${date}
                 </p>
         `;
 
@@ -480,6 +480,12 @@ class EmailApp {
                 </p>
             `;
         }
+
+        html += `
+                <p style="margin: 8px 0;">
+                    <strong><i class="fas fa-envelope"></i> 发件人：</strong>VNET 智能会议 Agent
+                </p>
+        `;
 
         if (summary.attendees && summary.attendees.length > 0) {
             const attendeesList = summary.attendees.join('、');
@@ -496,7 +502,7 @@ class EmailApp {
         if (summary.summary) {
             html += `
                 <div style="margin-bottom: 25px;">
-                    <h3 style="color: #4361ee; border-bottom: 2px solid #4361ee; padding-bottom: 10px; font-size: 18px;">
+                    <h3 style="color: #2d3748; border-bottom: 2px solid #4361ee; padding-bottom: 10px; font-size: 18px;">
                         <i class="fas fa-align-left"></i> 会议概要
                     </h3>
                     <p style="margin: 15px 0; line-height: 1.8;">${this.renderMarkdown(summary.summary)}</p>
@@ -508,7 +514,7 @@ class EmailApp {
         if (summary.keyPoints && summary.keyPoints.length > 0) {
             html += `
                 <div style="margin-bottom: 25px;">
-                    <h3 style="color: #4361ee; border-bottom: 2px solid #4361ee; padding-bottom: 10px; font-size: 18px;">
+                    <h3 style="color: #2d3748; border-bottom: 2px solid #4361ee; padding-bottom: 10px; font-size: 18px;">
                         <i class="fas fa-list-ul"></i> 讨论要点
                     </h3>
                     <ul style="margin: 15px 0; padding-left: 25px;">
@@ -523,7 +529,7 @@ class EmailApp {
         if (summary.actionItems && summary.actionItems.length > 0) {
             html += `
                 <div style="margin-bottom: 25px;">
-                    <h3 style="color: #ffd166; border-bottom: 2px solid #ffd166; padding-bottom: 10px; font-size: 18px;">
+                    <h3 style="color: #2d3748; border-bottom: 2px solid #ffd166; padding-bottom: 10px; font-size: 18px;">
                         <i class="fas fa-tasks"></i> 待办事项
                     </h3>
                     <ul style="margin: 15px 0; padding-left: 25px;">
@@ -538,7 +544,7 @@ class EmailApp {
         if (summary.decisions && summary.decisions.length > 0) {
             html += `
                 <div style="margin-bottom: 25px;">
-                    <h3 style="color: #4cc9f0; border-bottom: 2px solid #4cc9f0; padding-bottom: 10px; font-size: 18px;">
+                    <h3 style="color: #2d3748; border-bottom: 2px solid #4cc9f0; padding-bottom: 10px; font-size: 18px;">
                         <i class="fas fa-check-circle"></i> 决策事项
                     </h3>
                     <ul style="margin: 15px 0; padding-left: 25px;">

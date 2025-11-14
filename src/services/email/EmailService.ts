@@ -438,9 +438,9 @@ export class EmailService {
           会议基本信息
         </div>
         <div style="line-height: 2.0; color: #4a5568;">
-          <div><strong style="color: #2d3748;">📅 会议日期:</strong> ${displayDate}</div>
+          <div><strong style="color: #2d3748;">📆 会议日期:</strong> ${displayDate}</div>
           ${summary.duration ? `<div><strong style="color: #2d3748;">⏱️ 会议时长:</strong> ${summary.duration}</div>` : ''}
-          <div><strong style="color: #2d3748;">📧 发件人:</strong> ${this.config.from}</div>
+          <div><strong style="color: #2d3748;">📧 发件人:</strong> VNET 智能会议 Agent</div>
         </div>
       </div>
 
